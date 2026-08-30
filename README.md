@@ -10,6 +10,13 @@ adaptive theming, and **multi-account switching built in**.
 > protocol and building a native client against it. Use it at your own risk,
 > ideally with an account you can afford to lose.
 
+## Disclaimers
+
+You WILL need a Klipy API key if you want gifs to work.
+The app may not launch on first boot, all you need to do is run xattr -c /path/to/your/app.app and the app should open fine.
+
+
+
 ## Design
 
 Not a Discord re-skin. The UI is built with Swift designed with liquid glass elements in mind.
