@@ -1,6 +1,6 @@
 # Nitrous
 
-A third-party **Discord client for iOS**, built to look and feel like a
+A third-party **Discord client for macOS**, built to look and feel like a
 first-party Apple app — Human Interface Guidelines throughout, Liquid Glass,
 adaptive theming, and **multi-account switching built in**.
 
