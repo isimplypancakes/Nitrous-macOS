@@ -1,6 +1,5 @@
 import Foundation
 import UserNotifications
-import UIKit
 
 /// Local notifications for DMs and mentions, across **every** saved account.
 ///

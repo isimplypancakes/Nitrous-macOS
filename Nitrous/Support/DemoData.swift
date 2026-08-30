@@ -16,6 +16,33 @@ extension AppModel {
         user = me
         presences = ["2001": "online", "2002": "idle", "2003": "dnd", "2004": "online", "1000": "online"]
 
+        // Rich presence, the way it looks from a real PRESENCE_UPDATE.
+        let start = Int(Date().addingTimeInterval(-5400).timeIntervalSince1970 * 1000)
+        let raiding = Int(Date().addingTimeInterval(1800).timeIntervalSince1970 * 1000)
+        activitiesByUser = [
+            "2001": [
+                Presence.Activity(name: "Portal", type: 0, state: "Chambers 9–12",
+                                  details: "Singleplayer",
+                                  timestamps: .init(start: start),
+                                  assets: nil, applicationId: "440")
+            ],
+            "2002": [
+                Presence.Activity(name: "Custom Status", type: 4, state: "Waking up ☕",
+                                  emoji: Emoji(id: nil, name: "☕", animated: nil))
+            ],
+            "2003": [
+                Presence.Activity(name: "Spotify", type: 2, state: "Lateralus",
+                                  details: "Tool",
+                                  timestamps: .init(start: start, end: raiding),
+                                  assets: nil, applicationId: "spotify:1")
+            ],
+            "2004": [
+                Presence.Activity(name: "GameBot", type: 4, state: "Playing 3 games",
+                                  emoji: Emoji(id: nil, name: "🎮", animated: nil))
+            ],
+            "1000": []
+        ]
+
         func text(_ id: String, _ name: String, _ pos: Int, cat: String? = nil) -> Channel {
             Channel(id: id, type: .guildText, guildId: "g1", name: name, position: pos, parentId: cat)
         }

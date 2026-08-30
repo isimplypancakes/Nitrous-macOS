@@ -115,7 +115,7 @@ enum DiscordMarkdown {
         }
         // Masked until revealed.
         if !revealSpoilers {
-            let mask = onAccent ? Brand.onAccent.opacity(0.85) : Color(.label)
+            let mask = onAccent ? Brand.onAccent.opacity(0.85) : Palette.label
             for s in Set(spoilers) {
                 attr.color(occurrencesOf: s, with: mask, bold: false, background: mask)
             }
@@ -161,13 +161,31 @@ struct MarkdownContent: View {
     @EnvironmentObject var model: AppModel
     let message: Message
     let onAccent: Bool
+    /// Renders arbitrary text instead of `message.content` — used by bubbles
+    /// that split media links out of a message's caption.
+    var textOverride: String?
     @State private var revealed = false
 
-    private var hasSpoiler: Bool { message.content.contains("||") }
+    init(message: Message, onAccent: Bool, textOverride: String? = nil) {
+        self.message = message
+        self.onAccent = onAccent
+        self.textOverride = textOverride
+    }
+
+    /// A light-weight renderer for standalone caption text (no referenced
+    /// message — creation timestamps etc. are irrelevant).
+    init(text: String, onAccent: Bool) {
+        self.message = Message(id: "", channelId: nil, author: nil, content: text, timestamp: "")
+        self.onAccent = onAccent
+        self.textOverride = text
+    }
+
+    private var content: String { textOverride ?? message.content }
+    private var hasSpoiler: Bool { content.contains("||") }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            ForEach(DiscordMarkdown.blocks(message.content)) { block in
+            ForEach(DiscordMarkdown.blocks(EmojiShortcodes.expand(in: content))) { block in
                 view(for: block)
             }
         }
@@ -200,7 +218,7 @@ struct MarkdownContent: View {
                 .foregroundStyle(onAccent ? Brand.onAccent : Palette.label)
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(onAccent ? AnyShapeStyle(Color.black.opacity(0.10)) : AnyShapeStyle(Color(.tertiarySystemFill)),
+                .background(onAccent ? AnyShapeStyle(Color.black.opacity(0.10)) : AnyShapeStyle(Palette.tertiaryFill),
                             in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
     }

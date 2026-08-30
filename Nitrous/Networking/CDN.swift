@@ -38,8 +38,22 @@ enum CDN {
         return URL(string: "\(base)/channel-icons/\(channelID)/\(hash).png?size=240")
     }
 
+    /// The badge artwork a server shows next to a member's server tag.
+    static func guildTagBadge(guildID: Snowflake, hash: String) -> URL? {
+        URL(string: "\(base)/guild-tag-badges/\(guildID)/\(hash).png?size=64")
+    }
+
     static func emoji(id: Snowflake?, animated: Bool) -> URL? {
         guard let id else { return nil }
         return URL(string: "\(base)/emojis/\(id).\(animated ? "gif" : "png")?size=64")
+    }
+
+    /// Rich-presence artwork for a registered application, e.g. the Spotify
+    /// album cover or a game's splash art.
+    static func activityAsset(applicationID: String?, assetID: String?) -> URL? {
+        guard let applicationID, let assetID, !assetID.contains("spotify:") else { return nil }
+        // Nested queries (e.g. &w/&h) arrive quoted; strip leading quotes.
+        let cleaned = assetID.removingPercentEncoding ?? assetID
+        return URL(string: "\(base)/app-assets/\(applicationID)/\(String(cleaned.drop(while: { $0 == "\"" }))).png?size=160")
     }
 }

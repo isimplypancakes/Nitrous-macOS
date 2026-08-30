@@ -16,6 +16,8 @@ struct Guild: Codable, Identifiable, Hashable {
     var roles: [Role]?
     var emojis: [Emoji]?
     var memberCount: Int?
+    var members: [GuildMember]?
+    var features: [String]?
 
     var iconURL: URL? { CDN.icon(guildID: id, hash: icon) }
 
@@ -24,8 +26,17 @@ struct Guild: Codable, Identifiable, Hashable {
         name.split(separator: " ").compactMap { $0.first }.map(String.init).joined()
     }
 
+    /// Visible "tags" Discord stamps on a server (verified / partnered).
+    var tags: [(symbol: String, label: String)] {
+        let f = Set(features ?? [])
+        var out: [(symbol: String, label: String)] = []
+        if f.contains("VERIFIED") { out.append(("checkmark.seal.fill", "Verified")) }
+        if f.contains("PARTNERED") { out.append(("star.fill", "Partner")) }
+        return out
+    }
+
     private enum CodingKeys: String, CodingKey {
-        case id, name, icon, banner, ownerId, channels, roles, emojis, memberCount, properties
+        case id, name, icon, banner, ownerId, channels, roles, emojis, memberCount, members, properties, features
     }
 
     /// The nested form used by the user gateway.
@@ -42,6 +53,7 @@ struct Guild: Codable, Identifiable, Hashable {
 
         // `id` may live at the top level in both shapes.
         id = try c.decode(Snowflake.self, forKey: .id)
+        members = c.decodeLossyArray(GuildMember.self, forKey: .members)
         name = (try? c.decodeIfPresent(String.self, forKey: .name)) as? String
             ?? props?.name
             ?? "Unknown Server"
@@ -53,15 +65,16 @@ struct Guild: Codable, Identifiable, Hashable {
         channels = c.decodeLossyArray(Channel.self, forKey: .channels)
         roles = c.decodeLossyArray(Role.self, forKey: .roles)
         emojis = c.decodeLossyArray(Emoji.self, forKey: .emojis)
+        features = c.decodeLossyArray(String.self, forKey: .features)
         memberCount = try? c.decodeIfPresent(Int.self, forKey: .memberCount)
     }
 
     init(id: Snowflake, name: String, icon: String? = nil, banner: String? = nil,
          ownerId: Snowflake? = nil, channels: [Channel]? = nil, roles: [Role]? = nil,
-         emojis: [Emoji]? = nil, memberCount: Int? = nil) {
+         emojis: [Emoji]? = nil, memberCount: Int? = nil, members: [GuildMember]? = nil) {
         self.id = id; self.name = name; self.icon = icon; self.banner = banner
         self.ownerId = ownerId; self.channels = channels; self.roles = roles
-        self.emojis = emojis; self.memberCount = memberCount
+        self.emojis = emojis; self.memberCount = memberCount; self.members = members
     }
 
     func encode(to encoder: Encoder) throws {
@@ -75,6 +88,8 @@ struct Guild: Codable, Identifiable, Hashable {
         try c.encodeIfPresent(roles, forKey: .roles)
         try c.encodeIfPresent(emojis, forKey: .emojis)
         try c.encodeIfPresent(memberCount, forKey: .memberCount)
+        try c.encodeIfPresent(members, forKey: .members)
+        try c.encodeIfPresent(features, forKey: .features)
     }
 }
 

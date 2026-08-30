@@ -37,15 +37,21 @@ struct ReadyData: Decodable {
     var guilds: [Guild]
     var privateChannels: [Channel]
     var users: [DiscordUser]
+    /// Initial presence snapshot at login time.
+    var presences: [Presence] = []
     var readState: RawJSON?
     /// Guild IDs in the order Discord has saved for this account (may be empty).
     var guildOrder: [Snowflake] = []
     /// channelID -> last message the user has read.
     var lastReadByChannel: [Snowflake: Snowflake] = [:]
+    /// channelID -> unread mention count, Discord's authoritative badge state.
+    /// Reading on *another* device resets this to zero, which is what lets the
+    /// ping badge disappear here even though we never saw the message.
+    var mentionCountByChannel: [Snowflake: Int] = [:]
 
     private enum CodingKeys: String, CodingKey {
         case user, sessionId, resumeGatewayUrl, guilds, privateChannels, users,
-             readState, userSettingsProto
+             presences, readState, userSettingsProto
     }
 
     init(from decoder: Decoder) throws {
@@ -57,6 +63,7 @@ struct ReadyData: Decodable {
         guilds = c.decodeLossyArray(Guild.self, forKey: .guilds) ?? []
         privateChannels = c.decodeLossyArray(Channel.self, forKey: .privateChannels) ?? []
         users = c.decodeLossyArray(DiscordUser.self, forKey: .users) ?? []
+        presences = c.decodeLossyArray(Presence.self, forKey: .presences) ?? []
         readState = try? c.decodeIfPresent(RawJSON.self, forKey: .readState)
         if let proto = try? c.decodeIfPresent(String.self, forKey: .userSettingsProto) {
             guildOrder = GuildOrderProto.order(fromBase64: proto)
@@ -70,6 +77,12 @@ struct ReadyData: Decodable {
             for e in entries {
                 if let id = e["id"] as? String, let last = e["last_message_id"] as? String {
                     lastReadByChannel[id] = last
+                }
+                if let id = e["id"] as? String {
+                    // mention_count is absent on the bot-friendly gateway layout
+                    // and can be a raw number; tolerate both.
+                    mentionCountByChannel[id] = (e["mention_count"] as? Int)
+                        ?? (e["mention_count"] as? NSNumber)?.intValue
                 }
             }
         }
@@ -180,7 +193,37 @@ struct MessageReactionPayload: Decodable {
     let emoji: Emoji
 }
 
+/// Sent to *all* of a user's sessions when any one of them marks a channel read.
+/// This is how a ping cleared on the phone disappears from this sidebar too.
+struct MessageAckPayload: Decodable {
+    let channelId: Snowflake
+    let messageId: Snowflake?
+    let mentionCount: Int?
+}
+
 struct ChannelPinsUpdate: Decodable {
     let channelId: Snowflake
     let guildId: Snowflake?
+}
+
+/// One page of the roster Discord answers with when we send op 8
+/// (Request Guild Members). Large guilds arrive across several chunks; the
+/// `chunkIndex`/`chunkCount` pair marks progress.
+struct GuildMembersChunk: Decodable {
+    let guildId: Snowflake
+    var members: [GuildMember] = []
+    var presences: [Presence] = []
+    var chunkIndex: Int?
+    var chunkCount: Int?
+
+    private enum CodingKeys: String, CodingKey { case guildId, members, presences, chunkIndex, chunkCount }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guildId = try c.decode(Snowflake.self, forKey: .guildId)
+        members = c.decodeLossyArray(GuildMember.self, forKey: .members) ?? []
+        presences = c.decodeLossyArray(Presence.self, forKey: .presences) ?? []
+        chunkIndex = try? c.decodeIfPresent(Int.self, forKey: .chunkIndex)
+        chunkCount = try? c.decodeIfPresent(Int.self, forKey: .chunkCount)
+    }
 }

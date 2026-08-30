@@ -15,9 +15,8 @@ struct LoginView: View {
     @State private var showQR = false
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 28) {
+        ScrollView {
+            VStack(spacing: 28) {
                     VStack(spacing: 12) {
                         Image(systemName: "bubble.left.and.bubble.right.fill")
                             .font(.system(size: 56))
@@ -36,10 +35,11 @@ struct LoginView: View {
                                 Image(systemName: "qrcode.viewfinder").font(.title3)
                                 Text("Scan QR Code to Sign In").fontWeight(.semibold)
                             }
+                            .foregroundStyle(Brand.onAccent)
                             .frame(maxWidth: .infinity).padding(.vertical, 15)
                         }
-                        .background(Palette.accent.gradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .foregroundStyle(.white)
+                        .buttonStyle(.bouncy)
+                        .background(Palette.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                         Text("Approve from Discord on your phone — nothing to type.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -47,24 +47,26 @@ struct LoginView: View {
                     .padding(.horizontal)
 
                     HStack {
-                        Rectangle().fill(Color(.separator)).frame(height: 1)
+                        Rectangle().fill(Palette.separator).frame(height: 1)
                         Text("or").font(.caption).foregroundStyle(.secondary)
-                        Rectangle().fill(Color(.separator)).frame(height: 1)
+                        Rectangle().fill(Palette.separator).frame(height: 1)
                     }
                     .padding(.horizontal, 32)
 
                     VStack(spacing: 14) {
                         VStack(spacing: 0) {
                             TextField("Email or Phone", text: $email)
-                                .textContentType(.username).keyboardType(.emailAddress)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .autocorrectionDisabled()
                                 .padding()
                             Divider().padding(.leading)
                             SecureField("Password", text: $password)
-                                .textContentType(.password)
                                 .padding()
                         }
                         .background(Palette.secondaryGroupedBg, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Palette.separator, lineWidth: 1)
+                        )
 
                         if let error {
                             Text(error).font(.footnote).foregroundStyle(.red)
@@ -73,16 +75,24 @@ struct LoginView: View {
 
                         Button(action: submit) {
                             HStack {
-                                if busy { ProgressView() }
+                                if busy { ProgressView().tint(Brand.onAccent) }
                                 Text("Log In with Password").fontWeight(.semibold)
                             }
+                            .foregroundStyle(Brand.onAccent)
                             .frame(maxWidth: .infinity).padding(.vertical, 14)
                         }
-                        .background(Palette.secondaryGroupedBg, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .buttonStyle(.bouncy)
+                        .background(Palette.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .disabled(busy || email.isEmpty || password.isEmpty)
+                        .opacity(busy || email.isEmpty || password.isEmpty ? 0.45 : 1)
 
-                        Button("Use a login token instead") { showToken = true }
-                            .font(.subheadline)
+                        Button { showToken = true } label: {
+                            Text("Use a login token instead")
+                                .font(.subheadline.weight(.medium))
+                                .underline()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Palette.accent)
                     }
                     .padding(.horizontal)
 
@@ -93,17 +103,21 @@ struct LoginView: View {
                                     discriminator: "0", avatar: nil, addedAt: Date()), makeActive: true)
                         model.loadDemo()
                     } label: {
-                        Label("Explore demo workspace", systemImage: "sparkles").font(.subheadline)
+                        Label("Explore demo workspace", systemImage: "sparkles")
+                            .font(.subheadline.weight(.medium))
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Palette.accent)
                     #endif
                     Spacer(minLength: 20)
                 }
             }
             .themedBackground()
+            .frame(maxWidth: 460)
+            .frame(maxWidth: .infinity)
             .sheet(isPresented: Binding(get: { mfaTicket != nil }, set: { if !$0 { mfaTicket = nil } })) { mfaSheet }
             .sheet(isPresented: $showToken) { TokenSheet() }
             .sheet(isPresented: $showQR) { QRLoginView() }
-        }
     }
 
     private var mfaSheet: some View {
@@ -111,7 +125,7 @@ struct LoginView: View {
             Form {
                 Section {
                     TextField("000000", text: $mfaCode)
-                        .keyboardType(.numberPad).multilineTextAlignment(.center)
+                        .multilineTextAlignment(.center)
                         .font(.system(.title, design: .monospaced))
                 } header: {
                     Text("Two-Factor Authentication")
@@ -125,7 +139,7 @@ struct LoginView: View {
                 }
                 if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             }
-            .navigationTitle("Verify").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Verify")
         }
         .presentationDetents([.height(300)])
     }
@@ -170,9 +184,9 @@ struct TokenSheet: View {
                     TextField("Paste token", text: $token, axis: .vertical)
                         .lineLimit(3, reservesSpace: true)
                         .font(.system(.footnote, design: .monospaced))
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .autocorrectionDisabled()
                 } footer: {
-                    Text("Your token is stored only in this device's keychain and never leaves your phone.")
+                    Text("Your token is stored only in this device's keychain and never leaves this Mac.")
                 }
                 if let error { Text(error).foregroundStyle(.red).font(.footnote) }
                 Section {
@@ -181,7 +195,7 @@ struct TokenSheet: View {
                     }.disabled(token.isEmpty || busy)
                 }
             }
-            .navigationTitle("Sign in with Token").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Sign in with Token")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }
     }

@@ -1,10 +1,10 @@
 import SwiftUI
-import PhotosUI
 
 /// Theme picker. Each row previews the theme's own colours so the choice is
 /// visible before committing to it.
 struct AppearanceView: View {
     @EnvironmentObject var theme: ThemeStore
+    @State private var showBackgroundPicker = false
 
     private var adaptive: [AppTheme] { [.system, .light, .dark] }
     private var dark: [AppTheme] { [.oled, .midnight, .ocean, .indigoNight, .slate] }
@@ -23,7 +23,7 @@ struct AppearanceView: View {
             }
 
             Section {
-                NavigationLink { BackgroundPickerView() } label: {
+                Button { showBackgroundPicker = true } label: {
                     HStack {
                         Label(theme.hasWallpaper ? "Background" : "Choose Background",
                               systemImage: "photo.on.rectangle.angled")
@@ -33,18 +33,19 @@ struct AppearanceView: View {
                         }
                     }
                 }
-                .glassRow()
-
+                .buttonStyle(.bouncyRow)
             } header: {
                 Text("Background")
             } footer: {
-                Text("Pick a photo to sit behind the app so the glass has something to refract — choose the same image as your Home Screen wallpaper for a seamless look. iOS doesn't let apps read the system wallpaper directly.")
+                Text("Pick a photo to sit behind the app so the glass has something to refract. Choose the same image as your Desktop Picture for a seamless look — or use the “Use Desktop Picture” button and let the app mirror it exactly.")
             }
         }
         .scrollContentBackground(.hidden)
         .themedBackground()
-        .navigationTitle("Appearance")
-        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showBackgroundPicker) {
+            BackgroundPickerView()
+                .frame(width: 520, height: 560)
+        }
     }
 
     private func row(_ t: AppTheme) -> some View {
@@ -67,20 +68,19 @@ struct AppearanceView: View {
             .padding(.vertical, 3)
         }
         .buttonStyle(.bouncyRow)
-        .glassRow()
     }
 
     /// A miniature of the theme: background, a bubble and the accent.
     private func swatch(_ t: AppTheme) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(t.background ?? Color(.systemBackground))
+                .fill(t.background ?? Color(nsColor: .windowBackgroundColor))
             VStack(alignment: .leading, spacing: 3) {
                 Capsule()
-                    .fill(t.bubbleOther ?? Color(.secondarySystemFill))
+                    .fill(t.bubbleOther ?? Color.primary.opacity(0.07))
                     .frame(width: 22, height: 7)
                 Capsule()
-                    .fill(t.accent ?? Color.accentColor)
+                    .fill(t.accent ?? Palette.accent)
                     .frame(width: 15, height: 7)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }

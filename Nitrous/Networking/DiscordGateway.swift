@@ -14,6 +14,8 @@ enum GatewayEvent {
     case channelUpdate(Channel)
     case reactionAdd(MessageReactionPayload)
     case reactionRemove(MessageReactionPayload)
+    case messageAck(MessageAckPayload)
+    case guildMembersChunk(GuildMembersChunk)
     case connectionStateChanged(GatewayState)
     case failed(String)
 }
@@ -256,6 +258,10 @@ final class DiscordGateway {
             if let p = payload.decode(MessageReactionPayload.self, using: decoder) { emit(.reactionAdd(p)) }
         case "MESSAGE_REACTION_REMOVE":
             if let p = payload.decode(MessageReactionPayload.self, using: decoder) { emit(.reactionRemove(p)) }
+        case "MESSAGE_ACK":
+            if let p = payload.decode(MessageAckPayload.self, using: decoder) { emit(.messageAck(p)) }
+        case "GUILD_MEMBERS_CHUNK":
+            if let c = payload.decode(GuildMembersChunk.self, using: decoder) { emit(.guildMembersChunk(c)) }
         default:
             break
         }
@@ -266,9 +272,9 @@ final class DiscordGateway {
     private func sendIdentify() {
         Diag.gateway("-> IDENTIFY")
         let properties: [String: Any] = [
-            "os": "iOS", "browser": "Discord iOS", "device": "iPhone",
+            "os": "macOS", "browser": "Discord Mac", "device": "",
             "system_locale": "en-US", "release_channel": "stable",
-            "client_version": "1.0", "os_version": "17.0"
+            "client_version": "1.0", "os_version": ProcessInfo.processInfo.operatingSystemVersionString
         ]
         let payload: [String: Any] = [
             "op": GatewayOpcode.identify.rawValue,
@@ -325,6 +331,35 @@ final class DiscordGateway {
         let payload: [String: Any] = [
             "op": GatewayOpcode.heartbeat.rawValue,
             "d": sequence.map { $0 as Any } ?? NSNull()
+        ]
+        sendJSON(payload)
+    }
+
+    /// Asks Discord to stream a guild's full roster as `GUILD_MEMBERS_CHUNK`
+    /// events — the desktop client's own path. `query: ""` + `limit: 0` means
+    /// "everyone", which user tokens are allowed to request over the gateway
+    /// even where the REST members endpoint is locked down.
+    func requestMembers(guildID: Snowflake) {
+        Diag.gateway("-> REQUEST_GUILD_MEMBERS \(guildID)")
+        let payload: [String: Any] = [
+            "op": GatewayOpcode.requestGuildMembers.rawValue,
+            "d": ["guild_id": guildID, "query": "", "limit": 0, "presences": true]
+        ]
+        sendJSON(payload)
+    }
+
+    /// Broadcasts the user's own presence: status plus whatever activities the
+    /// Rich Presence IPC listener fed in. Discord fills in id/created_at itself.
+    func updatePresence(status: String, activities: [Presence.Activity]) {
+        let enc = JSONEncoder()
+        var acts: [Any] = []
+        for a in activities {
+            if let data = try? enc.encode(a),
+               let obj = try? JSONSerialization.jsonObject(with: data) { acts.append(obj) }
+        }
+        let payload: [String: Any] = [
+            "op": GatewayOpcode.presenceUpdate.rawValue,
+            "d": ["status": status, "since": 0, "activities": acts, "afk": false]
         ]
         sendJSON(payload)
     }

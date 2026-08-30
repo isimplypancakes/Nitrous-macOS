@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreImage.CIFilterBuiltins
+import AppKit
 
 /// Sign in by scanning a QR code with the official Discord app — the same
 /// remote-auth flow Discord's desktop client uses. No token pasting.
@@ -76,7 +77,6 @@ struct QRLoginView: View {
             }
             .themedBackground()
             .navigationTitle("Scan to Sign In")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { auth.cancel(); dismiss() }
@@ -102,7 +102,7 @@ struct QRLoginView: View {
     private func qr(for string: String) -> some View {
         placeholder {
             if let image = Self.qrImage(from: string) {
-                Image(uiImage: image)
+                Image(nsImage: image)
                     .interpolation(.none)      // keep the modules crisp
                     .resizable()
                     .scaledToFit()
@@ -124,7 +124,7 @@ struct QRLoginView: View {
     }
 
     /// Generates a QR code at a resolution high enough to scan off-screen.
-    static func qrImage(from string: String) -> UIImage? {
+    static func qrImage(from string: String) -> NSImage? {
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(string.utf8)
         filter.correctionLevel = "M"
@@ -132,6 +132,9 @@ struct QRLoginView: View {
         let scaled = output.transformed(by: CGAffineTransform(scaleX: 12, y: 12))
         let context = CIContext()
         guard let cg = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return UIImage(cgImage: cg)
+        let rep = NSBitmapImageRep(cgImage: cg)
+        let image = NSImage(size: NSSize(width: cg.width, height: cg.height))
+        image.addRepresentation(rep)
+        return image
     }
 }

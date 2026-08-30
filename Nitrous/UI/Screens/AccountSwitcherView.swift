@@ -37,18 +37,17 @@ struct AddAccountSheet: View {
                 if mode == 0 {
                     Section("Credentials") {
                         TextField("Email or phone", text: $email)
-                            .textContentType(.username).keyboardType(.emailAddress)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .autocorrectionDisabled()
                         SecureField("Password", text: $password)
                         if mfaTicket != nil {
-                            TextField("Two-factor code", text: $mfaCode).keyboardType(.numberPad)
+                            TextField("Two-factor code", text: $mfaCode)
                         }
                     }
                 } else {
                     Section {
                         TextField("Paste token", text: $token, axis: .vertical)
                             .lineLimit(3, reservesSpace: true)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .autocorrectionDisabled()
                             .font(.system(.footnote, design: .monospaced))
                     } header: {
                         Text("Login Token")
@@ -75,7 +74,6 @@ struct AddAccountSheet: View {
             .scrollContentBackground(.hidden)
             .themedBackground()
             .navigationTitle("Add Account")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .sheet(isPresented: $showQR) { QRLoginView() }
         }

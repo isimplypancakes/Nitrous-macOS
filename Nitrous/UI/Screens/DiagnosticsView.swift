@@ -1,10 +1,10 @@
 import SwiftUI
+import AppKit
 
 /// Readable, shareable connection log. This is the screen to open when
 /// something won't connect — and the one to share when reporting it.
 struct DiagnosticsView: View {
     @ObservedObject private var log = DiagnosticLog.shared
-    @State private var showShare = false
     @State private var filter: String? = nil
     @State private var copied = false
 
@@ -54,16 +54,17 @@ struct DiagnosticsView: View {
         }
         .scrollContentBackground(.hidden)
         .themedBackground()
-        .navigationTitle("Diagnostics")
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .automatic) {
                 Menu {
                     Button {
-                        UIPasteboard.general.string = log.exportText
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(log.exportText, forType: .string)
                         copied = true
                     } label: { Label("Copy Log", systemImage: "doc.on.doc") }
-                    Button { showShare = true } label: { Label("Share Log", systemImage: "square.and.arrow.up") }
+                    ShareLink(item: log.exportText) {
+                        Label("Share Log", systemImage: "square.and.arrow.up")
+                    }
                     Divider()
                     Button(role: .destructive) { log.clear() } label: { Label("Clear", systemImage: "trash") }
                 } label: {
@@ -71,7 +72,6 @@ struct DiagnosticsView: View {
                 }
             }
         }
-        .sheet(isPresented: $showShare) { ShareSheet(text: log.exportText) }
         .alert("Copied", isPresented: $copied) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -87,13 +87,4 @@ struct DiagnosticsView: View {
         case .success: return .green
         }
     }
-}
-
-/// UIActivityViewController bridge for sharing the log as text.
-struct ShareSheet: UIViewControllerRepresentable {
-    let text: String
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: [text], applicationActivities: nil)
-    }
-    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }

@@ -14,8 +14,8 @@ schemes:
 targets:
   Nitrous:
     type: application
-    platform: iOS
-    deploymentTarget: "17.0"
+    platform: macOS
+    deploymentTarget: "14.0"
     sources:
       - Nitrous
     info:
@@ -24,28 +24,19 @@ targets:
         CFBundleDisplayName: Nitrous
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        UILaunchScreen:
-          UIColorName: LaunchBackground
-        UISupportedInterfaceOrientations:
-          - UIInterfaceOrientationPortrait
-        UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-        ITSAppUsesNonExemptEncryption: false
-        NSPhotoLibraryUsageDescription: "Attach images to your messages."
-        NSCameraUsageDescription: "Capture photos to send in chat."
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSApplicationCategoryType: public.app-category.social-networking
+        NSPrincipalClass: NSApplication
+        NSHighResolutionCapable: true
     settings:
       base:
         PRODUCT_NAME: Nitrous
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.nitrous
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.nitrous.mac
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "14"
-        TARGETED_DEVICE_FAMILY: "1,2"
+        CURRENT_PROJECT_VERSION: "1"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
         # Set DEVELOPMENT_TEAM to your own Apple Developer team ID, or

@@ -1,6 +1,6 @@
 import SwiftUI
 import Combine
-import UIKit
+import AppKit
 
 extension Color {
     init(hex: UInt32) {
@@ -14,7 +14,7 @@ extension Color {
 
 /// A selectable colour scheme.
 ///
-/// `system` keeps the adaptive iOS look; every other theme pins an explicit
+/// `system` keeps the adaptive macOS look; every other theme pins an explicit
 /// palette so OLED black stays truly black and the blues stay on-hue.
 struct AppTheme: Identifiable, Hashable {
     let id: String
@@ -30,7 +30,7 @@ struct AppTheme: Identifiable, Hashable {
     let separator: Color?
 
     static let system = AppTheme(
-        id: "system", name: "System", blurb: "Matches iOS light or dark",
+        id: "system", name: "System", blurb: "Matches macOS light or dark",
         scheme: nil, background: nil, grouped: nil, elevated: nil,
         bubbleOther: nil, accent: nil, separator: nil)
 
@@ -106,13 +106,11 @@ final class ThemeStore: ObservableObject {
         didSet { UserDefaults.standard.set(current.id, forKey: key) }
     }
 
-    /// A user-chosen background image. When set, screen backgrounds go clear so
-    /// the glass layers float over it.
-    ///
-    /// iOS gives apps no way to read the system wallpaper — the sandbox has no
-    /// API for it — so the user picks their own image (they can choose the same
-    /// photo their Home Screen uses).
-    @Published var wallpaper: UIImage?
+    /// A user-chosen background image. The glass layers refract against it, the
+    /// same trick the iOS client uses. On a Mac the *real* desktop picture is
+    /// readable (`adoptDesktopPicture`), so "invisible" glass is even truer —
+    /// pick your own photo for a different look than the current wallpaper.
+    @Published var wallpaper: NSImage?
     /// How much to dim the wallpaper so text stays readable over it.
     @Published var wallpaperDim: Double {
         didSet { UserDefaults.standard.set(wallpaperDim, forKey: dimKey) }
@@ -128,13 +126,24 @@ final class ThemeStore: ObservableObject {
     var hasWallpaper: Bool { wallpaper != nil }
 
     func setWallpaper(_ data: Data?) {
-        guard let data, let image = UIImage(data: data) else {
+        guard let data, let image = NSImage(data: data) else {
             try? FileManager.default.removeItem(at: wallpaperURL)
             wallpaper = nil
             return
         }
         try? data.write(to: wallpaperURL, options: .atomic)
         wallpaper = image
+    }
+
+    /// Copies the machine's actual desktop picture behind the app so the glass
+    /// refracts against what's already on screen. macOS can read this; iOS can't.
+    func adoptDesktopPicture() {
+        // Prefer the picture currently on the focused display.
+        let screens = NSScreen.screens
+        guard let screen = NSScreen.main ?? screens.first else { return }
+        guard let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return }
+        guard let data = try? Data(contentsOf: url) else { return }
+        setWallpaper(data)
     }
 
     private init() {
@@ -144,20 +153,33 @@ final class ThemeStore: ObservableObject {
         wallpaperDim = dim ?? 0.35
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let url = dir.appendingPathComponent("wallpaper.jpg")
-        if let data = try? Data(contentsOf: url) { wallpaper = UIImage(data: data) }
+        if let data = try? Data(contentsOf: url) { wallpaper = NSImage(data: data) }
     }
 }
 
 /// The single app accent.
 ///
-/// Deliberately very light: the glass surfaces render dark over a wallpaper,
-/// so a pale lavender reads far better than either the original indigo or a
-/// dark one. Applied universally, overriding each theme's own accent.
+/// Resolves per appearance so it always reads as clearly tappable: on a light
+/// window it's a saturated indigo (white text on top), and over the dark glass
+/// of a dark window it becomes the pale lavender that glows against the
+/// wallpaper. Applied universally, overriding each theme's own accent.
 enum Brand {
-    static let accent = Color(hex: 0xDCDAFF)
-    /// Text/icons drawn *on top of* the accent (e.g. the sender's own bubble),
-    /// which must be dark now that the accent itself is pale.
-    static let onAccent = Color(hex: 0x1B1A3A)
+    static let accent = Color(nsColor: adaptive(srgb: 0x5E5CE6, dark: 0xDCDAFF))
+    /// Text/icons drawn *on top of* the accent (own bubbles, filled buttons).
+    static let onAccent = Color(nsColor: adaptive(srgb: 0xFFFFFF, dark: 0x1B1A3A))
+}
+
+/// An `NSColor` that re-resolves per appearance while staying inside a macro
+/// palette — so `Palette.accent` picks indigo on a light window and lavender
+/// on a dark one without any manual scheme branching at call sites.
+private func adaptive(srgb light: UInt32, dark: UInt32) -> NSColor {
+    NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return NSColor(srgbRed: CGFloat((isDark ? dark : light) >> 16 & 0xFF) / 255,
+                       green: CGFloat((isDark ? dark : light) >> 8 & 0xFF) / 255,
+                       blue: CGFloat((isDark ? dark : light) & 0xFF) / 255,
+                       alpha: 1)
+    }
 }
 
 /// Semantic colours. Falls back to system colours whenever the active theme
@@ -172,30 +194,32 @@ enum Palette {
     static var usingWallpaper: Bool { ThemeStore.shared.hasWallpaper }
 
     static var background: Color {
-        usingWallpaper ? .clear : (t.background ?? Color(.systemBackground))
+        usingWallpaper ? .clear : (t.background ?? Color(nsColor: .windowBackgroundColor))
     }
-    static var secondaryBg: Color { t.elevated ?? Color(.secondarySystemBackground) }
+    static var secondaryBg: Color { t.elevated ?? Color(nsColor: .controlBackgroundColor) }
     static var groupedBg: Color {
-        usingWallpaper ? .clear : (t.grouped ?? Color(.systemGroupedBackground))
+        usingWallpaper ? .clear : (t.grouped ?? Color(nsColor: .windowBackgroundColor))
     }
-    static var secondaryGroupedBg: Color { t.elevated ?? Color(.secondarySystemGroupedBackground) }
-    static var separator: Color { t.separator ?? Color(.separator) }
+    static var secondaryGroupedBg: Color { t.elevated ?? Color(nsColor: .controlBackgroundColor) }
+    static var separator: Color { t.separator ?? Color(nsColor: .separatorColor) }
+    /// A soft fill for code blocks and image placeholders.
+    static var tertiaryFill: Color { Color(nsColor: NSColor.quaternaryLabelColor) }
 
-    static var label: Color { Color(.label) }
-    static var secondary: Color { Color(.secondaryLabel) }
-    static var tertiary: Color { Color(.tertiaryLabel) }
+    static var label: Color { Color(nsColor: .labelColor) }
+    static var secondary: Color { Color(nsColor: .secondaryLabelColor) }
+    static var tertiary: Color { Color(nsColor: .tertiaryLabelColor) }
 
     static var bubbleMine: Color { accent }
     static var bubbleMineText: Color { Brand.onAccent }
-    static var bubbleOther: Color { t.bubbleOther ?? Color(.secondarySystemFill) }
-    static var bubbleOtherText: Color { Color(.label) }
+    static var bubbleOther: Color { t.bubbleOther ?? Color.primary.opacity(0.07) }
+    static var bubbleOtherText: Color { Color(nsColor: .labelColor) }
 
     static func presence(_ status: String?) -> Color {
         switch status {
-        case "online": return Color(.systemGreen)
-        case "idle": return Color(.systemYellow)
-        case "dnd": return Color(.systemRed)
-        default: return Color(.systemGray3)
+        case "online": return Color(nsColor: .systemGreen)
+        case "idle": return Color(nsColor: .systemYellow)
+        case "dnd": return Color(nsColor: .systemRed)
+        default: return Color(nsColor: .systemGray)
         }
     }
 }

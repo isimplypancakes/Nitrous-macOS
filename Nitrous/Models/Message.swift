@@ -105,3 +105,26 @@ struct Reaction: Codable, Hashable {
     var me: Bool
     var emoji: Emoji
 }
+
+/// One recorded delete or edit from the opt-in message logger
+/// (Settings → Privacy). Lives only on this device, newest first.
+struct MessageLogEntry: Identifiable, Codable, Hashable {
+    let id: String
+    let messageID: Snowflake
+    let channelID: Snowflake
+    let guildID: Snowflake?
+    let authorID: Snowflake?
+    let authorName: String?
+    let content: String?
+    let kind: Kind
+    let timestamp: Date
+    /// Content before the change, for edits.
+    let editedFrom: String?
+
+    enum Kind: String, Codable, Hashable {
+        case deleted, edited
+
+        var title: String { self == .deleted ? "Deleted" : "Edited" }
+        var symbol: String { self == .deleted ? "trash.fill" : "pencil" }
+    }
+}

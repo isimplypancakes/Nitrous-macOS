@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Notification preferences. Explains the multi-account behaviour, because
 /// "notifications for accounts you aren't using" is unusual enough to warrant it.
@@ -24,16 +25,14 @@ struct NotificationSettingsView: View {
                     } label: {
                         Label("Allow Notifications", systemImage: "checkmark.circle.fill")
                     }
-                    .glassRow()
 
                     Button {
-                        if let url = URL(string: UIApplication.openSettingsURLString) {
-                            UIApplication.shared.open(url)
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
+                            NSWorkspace.shared.open(url)
                         }
                     } label: {
-                        Label("Open iOS Settings", systemImage: "gear")
+                        Label("Open System Settings…", systemImage: "gear")
                     }
-                    .glassRow()
                 }
             } footer: {
                 Text("You'll be notified for direct messages and mentions.")
@@ -64,8 +63,6 @@ struct NotificationSettingsView: View {
         }
         .scrollContentBackground(.hidden)
         .themedBackground()
-        .navigationTitle("Notifications")
-        .navigationBarTitleDisplayMode(.inline)
         .onAppear { notifications.refreshAuthorization() }
     }
 }

@@ -57,7 +57,6 @@ struct NewMessageView: View {
             .scrollContentBackground(.hidden)
             .themedBackground()
             .navigationTitle("New Message")
-            .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $search, prompt: "Search people")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

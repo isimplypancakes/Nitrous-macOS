@@ -1,26 +1,40 @@
 import SwiftUI
-import PhotosUI
+import AppKit
+import UniformTypeIdentifiers
 
-/// Chooses a background image for the app. Lives on its own screen because a
-/// PhotosPicker presented from inside the Appearance List didn't open.
+/// Chooses a background image for the app. Presented as its own window because
+/// an open panel shown from inside the Appearance list doesn't get a frame.
+/// mac-specific bonus: the app can adopt the machine's actual Desktop Picture,
+/// which is how the glass starts to look like it belongs to the screen.
 struct BackgroundPickerView: View {
     @EnvironmentObject var theme: ThemeStore
-    @State private var pick: PhotosPickerItem?
+    @Environment(\.dismiss) private var dismiss
+    @State private var showOpenPanel = false
 
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
                 preview
 
-                PhotosPicker(selection: $pick, matching: .images, photoLibrary: .shared()) {
-                    Label(theme.hasWallpaper ? "Change Photo" : "Choose Photo",
-                          systemImage: "photo.on.rectangle.angled")
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity).padding(.vertical, 14)
+                HStack(spacing: 10) {
+                    Button { showOpenPanel = true } label: {
+                        Label(theme.hasWallpaper ? "Change Photo…" : "Choose Photo…",
+                              systemImage: "photo.on.rectangle.angled")
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity).padding(.vertical, 13)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button {
+                        withAnimation { theme.adoptDesktopPicture() }
+                    } label: {
+                        Label("Use Desktop Picture", systemImage: "display")
+                            .fontWeight(.medium)
+                            .frame(maxWidth: .infinity).padding(.vertical, 13)
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Mirror the wallpaper already on this screen behind the app")
                 }
-                .liquidGlass(cornerRadius: 14, interactive: true)
-                .foregroundStyle(Palette.accent)
-                .bouncyPress()
 
                 if theme.hasWallpaper {
                     VStack(alignment: .leading, spacing: 8) {
@@ -38,38 +52,43 @@ struct BackgroundPickerView: View {
                         Label("Remove Background", systemImage: "trash")
                             .frame(maxWidth: .infinity).padding(.vertical, 13)
                     }
-                    .liquidGlass(cornerRadius: 14)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.red)
                 }
 
-                Text("Pick a photo to sit behind the app so the glass has something to refract. Choose the same image as your Home Screen wallpaper for a seamless look — iOS doesn't let apps read the system wallpaper directly.")
+                Text("Pick a photo to sit behind the app so the glass has something to refract, or mirror this screen's Desktop Picture for a seamless look.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(16)
         }
         .themedBackground()
-        .navigationTitle("Background")
-        .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: pick) {
-            guard let pick else { return }
-            Task {
-                let data = try? await pick.loadTransferable(type: Data.self)
-                await MainActor.run { withAnimation { theme.setWallpaper(data) } }
-            }
+        .fileImporter(isPresented: $showOpenPanel,
+                      allowedContentTypes: [.image],
+                      allowsMultipleSelection: false) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            let access = url.startAccessingSecurityScopedResource()
+            guard let data = try? Data(contentsOf: url) else { return }
+            if access { url.stopAccessingSecurityScopedResource() }
+            withAnimation { theme.setWallpaper(data) }
         }
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+        }
+        .frame(minWidth: 480, minHeight: 420)
     }
 
     @ViewBuilder private var preview: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemFill))
+                .fill(Color.primary.opacity(0.06))
             if let wallpaper = theme.wallpaper {
                 // The image MUST be clipped to a measured width. A bare
                 // `scaledToFill` propagates its own intrinsic width and stretches
-                // every sibling past the screen edge — `.frame(height:)` alone
+                // every sibling past the window edge — `.frame(height:)` alone
                 // constrains only the height.
                 GeometryReader { geo in
-                    Image(uiImage: wallpaper)
+                    Image(nsImage: wallpaper)
                         .resizable()
                         .scaledToFill()
                         .frame(width: geo.size.width, height: geo.size.height)

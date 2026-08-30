@@ -76,7 +76,7 @@ final class DiagnosticLog: ObservableObject {
         Nitrous diagnostics
         App \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") \
         (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"))
-        iOS \(ProcessInfo.processInfo.operatingSystemVersionString)
+        macOS \(ProcessInfo.processInfo.operatingSystemVersionString)
         Exported \(ISO8601DateFormatter().string(from: Date()))
         ─────────────────────────────
         """
