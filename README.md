@@ -19,8 +19,24 @@ Not a Discord re-skin. The UI is built with Swift designed with liquid glass ele
 
 Working: Messaging, Sending and viewing gifs (with a Klipy API Key you need to generate) reactions, replies, pings, DMs, File uploads, deleted message logging, typing indicator
 
-Not Working/Not Implemented: Voice calling, gifs without api key, server discovery, slash commands, moderation tools, more
+Not Working/Not Implemented: Voice calling, gifs without api key, server discovery, slash commands, moderation tools, more## Build
 
+## Build
+
+Requires Xcode 26 and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
+
+```bash
+brew install xcodegen
+xcodegen generate
+open Nitrous.xcodeproj
+```
+
+Set your own signing team in Xcode (or `DEVELOPMENT_TEAM` in `project.yml`) and
+change `PRODUCT_BUNDLE_IDENTIFIER` from `com.example.nitrous` to something you
+own. The `.xcodeproj` is generated and intentionally not committed.
+
+On the login screen in a DEBUG build, **Explore demo workspace** loads a fully
+populated offline session, so the UI can be driven without any credentials.
 
 
 
