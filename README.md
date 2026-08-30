@@ -26,7 +26,7 @@ Not a Discord re-skin. The UI is built with Swift designed with liquid glass ele
 
 Working: Messaging, Sending and viewing gifs (with a Klipy API Key you need to generate) reactions, replies, pings, DMs, File uploads, deleted message logging, typing indicator
 
-Not Working/Not Implemented: Voice calling, gifs without api key, server discovery, slash commands, moderation tools, more## Build
+Not Working/Not Implemented: Voice calling, gifs without api key, server discovery, slash commands, moderation tools, more
 
 ## Build
 
