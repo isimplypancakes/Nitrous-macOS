@@ -48,6 +48,13 @@ enum CDN {
         return URL(string: "\(base)/emojis/\(id).\(animated ? "gif" : "png")?size=64")
     }
 
+    /// A sticker asset. Format 4 is a true GIF (animated); PNG/APNG/LOTTIE all
+    /// serve a PNG, and even LOTTIE's JSON has a static preview available.
+    static func sticker(id: Snowflake, formatType: Int?) -> URL? {
+        let ext = formatType == 4 ? "gif" : "png"
+        return URL(string: "\(base)/stickers/\(id).\(ext)")
+    }
+
     /// Rich-presence artwork for a registered application, e.g. the Spotify
     /// album cover or a game's splash art.
     static func activityAsset(applicationID: String?, assetID: String?) -> URL? {

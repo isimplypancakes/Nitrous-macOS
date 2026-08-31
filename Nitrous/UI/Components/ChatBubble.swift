@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVKit
 
 /// A single message as an iMessage-style bubble. `mine` right-aligns and tints;
 /// otherwise it's a neutral bubble on the left with an optional avatar + name
@@ -137,6 +138,7 @@ struct ChatBubble: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, showHeader ? 14 : 2)
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .background {
                 // Attention grabber: an accent wash across the whole row (and a
                 // small pill, see above) when the message calls out the reader.
@@ -145,7 +147,7 @@ struct ChatBubble: View {
                         .fill(Palette.accent.opacity(0.11))
                 }
             }
-            .contextMenu { contextMenu }
+            .contextMenu { menuItems }
             .confirmationDialog(dialogTitle,
                                 isPresented: Binding(
                                     get: { pendingMod != nil },
@@ -159,7 +161,7 @@ struct ChatBubble: View {
             }
             .sheet(item: $viewerItem) { MediaViewer(item: $0) }
             .sheet(isPresented: $showEmojiPicker) {
-                EmojiPickerView { pick in react(pick) }
+                EmojiPickerView(guildEmojis: currentGuildEmojis) { pick in react(pick) }
             }
         }
     }
@@ -237,9 +239,46 @@ struct ChatBubble: View {
     }
 
     @ViewBuilder private var bubble: some View {
-        splitBubble
-            .opacity(isPending ? 0.6 : 1)
-            .frame(maxWidth: 520, alignment: mine ? .trailing : .leading)
+        VStack(alignment: mine ? .trailing : .leading, spacing: 3) {
+            // Slash-command messages carry no visible app tag otherwise — a
+            // muted "App /command" line reads exactly like Discord's.
+            if let cmd = message.interaction?.name, !cmd.isEmpty { interactionLine(cmd) }
+            splitBubble
+            // A message that spawned a thread shows a tappable preview of it.
+            if let thread = message.thread { threadPreview(thread) }
+        }
+        .opacity(isPending ? 0.6 : 1)
+        .frame(maxWidth: 520, alignment: mine ? .trailing : .leading)
+    }
+
+    private func interactionLine(_ cmd: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "sparkles").font(.system(size: 9, weight: .semibold))
+            Text("/\(cmd)").font(.caption.weight(.semibold))
+        }
+        .foregroundStyle(Palette.accent)
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(Palette.accent.opacity(0.12), in: Capsule())
+    }
+
+    private func threadPreview(_ thread: Channel) -> some View {
+        Button { model.selectChannel(thread.id) } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "number").font(.footnote).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(thread.name ?? "Thread").font(.subheadline.weight(.medium)).lineLimit(1)
+                    if let topic = thread.topic, !topic.isEmpty {
+                        Text(topic).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: 340, alignment: .leading)
     }
 
     private var contentMedia: [URL] { MediaLink.mediaURLs(in: message.content) }
@@ -261,6 +300,7 @@ struct ChatBubble: View {
                     textSlice(caption)
                     attachments
                     embeds()
+                    stickers
                 }
             }
         }
@@ -271,6 +311,34 @@ struct ChatBubble: View {
             mediaGallery(contentMedia)
             attachments
             embeds(deduping: contentMedia)
+            stickers
+        }
+    }
+
+    /// Sticker attachments. Sticker-only messages are mostly empty *except*
+    /// this, so the capsule must still grow to hold a big one.
+    @ViewBuilder private var stickers: some View {
+        if let items = message.stickerItems, !items.isEmpty {
+            HStack(alignment: .bottom, spacing: 6) {
+                ForEach(items) { item in
+                    StickerThumb(item: item)
+                }
+            }
+            .padding(.top, stickerOnly ? 4 : 6)
+            .padding(.horizontal, stickerOnly ? -2 : 0)
+        }
+    }
+
+    private var stickerOnly: Bool {
+        !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            && !messageHasMedia
+    }
+
+    private var messageHasMedia: Bool {
+        guard let atts = message.attachments, !atts.isEmpty else { return false }
+        return atts.contains { att in
+            guard let url = URL(string: att.url) else { return false }
+            return MediaLink.urlIsMedia(url)
         }
     }
 
@@ -288,10 +356,11 @@ struct ChatBubble: View {
 
     @ViewBuilder private func textSlice(_ caption: String) -> some View {
         if !caption.isEmpty {
+            // `.textSelection(.enabled)` routes right-clicks to the field's
+            // own select/copy menu on macOS and makes the message context menu
+            // unreliable ("half the time nothing happens"). Copy lives in the
+            // context menu; selection was the trade-off, and it cost the menu.
             MarkdownContent(text: caption, onAccent: false)
-                // macOS: unlike iOS, selectable text doesn't clobber the
-                // context menu — double-click selects, right-click acts.
-                .textSelection(.enabled)
             if message.editedTimestamp != nil {
                 Text("(edited)")
                     .font(.caption2)
@@ -302,68 +371,87 @@ struct ChatBubble: View {
 
     @ViewBuilder private func mediaGallery(_ urls: [URL]) -> some View {
         ForEach(Array(urls.enumerated()), id: \.offset) { _, url in
-            Button {
-                viewerItem = MediaViewerItem(url: url, isGIF: MediaLink.isGIF(url), title: nil)
-            } label: {
-                Group {
-                    if MediaLink.isGIF(url) {
-                        GIFImage(url: url, maxWidth: 400)
-                    } else {
-                        AsyncImage(url: url) { phase in
-                            if let img = phase.image {
-                                img.resizable().scaledToFit()
-                            } else {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(.quaternary)
-                                    .overlay(ProgressView())
+            if MediaLink.isVideo(url) {
+                VideoAttachmentView(url: url, title: url.lastPathComponent)
+            } else {
+                Button {
+                    viewerItem = MediaViewerItem(url: url, isGIF: MediaLink.isGIF(url), title: nil)
+                } label: {
+                    Group {
+                        if MediaLink.isGIF(url) {
+                            GIFImage(url: url, maxWidth: 400)
+                        } else {
+                            AsyncImage(url: url) { phase in
+                                if let img = phase.image {
+                                    img.resizable().scaledToFit()
+                                } else {
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(.quaternary)
+                                        .overlay(ProgressView())
+                                }
                             }
+                            .frame(maxWidth: 400, maxHeight: 320)
                         }
-                        .frame(maxWidth: 400, maxHeight: 320)
                     }
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
     }
 
     @ViewBuilder private var attachments: some View {
         if let atts = message.attachments, !atts.isEmpty {
             ForEach(atts) { att in
-                if att.isImage, let url = att.mediaURL {
+                if att.isVideo, let url = att.mediaURL {
+                    VideoAttachmentView(url: url, title: att.filename)
+                } else if att.isImage, let url = att.mediaURL {
                     // Reserve the final size up front (from the attachment's own
                     // width/height) so the row doesn't reflow — and the scroll
                     // position doesn't jump — when the image finishes loading.
                     let size = imageBox(for: att)
-                    Button {
-                        viewerItem = MediaViewerItem(url: url, isGIF: MediaLink.isGIF(url), title: att.filename)
-                    } label: {
-                        Group {
-                            if MediaLink.isGIF(url) {
-                                // Animated GIF attachments (including GIFs sent
-                                // from the picker, which upload as .gif files)
-                                // play through our frame animator.
-                                GIFImage(url: url, maxWidth: size.width)
-                            } else {
-                                AsyncImage(url: url) { phase in
-                                    if let img = phase.image {
-                                        img.resizable().scaledToFill()
-                                    } else {
-                                        RoundedRectangle(cornerRadius: 12).fill(.quaternary)
-                                            .overlay(ProgressView())
+                    if att.filename.uppercased().hasPrefix("SPOILER_") {
+                        SpoilerMediaAttachment(url: url, isGIF: MediaLink.isGIF(url), size: size)
+                    } else {
+                        Button {
+                            viewerItem = MediaViewerItem(url: url, isGIF: MediaLink.isGIF(url), title: att.filename)
+                        } label: {
+                            Group {
+                                if MediaLink.isGIF(url) {
+                                    // Animated GIF attachments (including GIFs sent
+                                    // from the picker, which upload as .gif files)
+                                    // play through our frame animator.
+                                    GIFImage(url: url, maxWidth: size.width)
+                                } else {
+                                    AsyncImage(url: url) { phase in
+                                        if let img = phase.image {
+                                            img.resizable().scaledToFill()
+                                        } else {
+                                            RoundedRectangle(cornerRadius: 12).fill(.quaternary)
+                                                .overlay(ProgressView())
+                                        }
                                     }
                                 }
                             }
+                            .frame(width: size.width, height: size.height)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
-                        .frame(width: size.width, height: size.height)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .buttonStyle(.plain)
+                    }
+                } else if let url = att.mediaURL ?? URL(string: att.proxyUrl ?? "") {
+                    Button { saveRemoteFile(url: url, filename: att.filename) } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "doc.fill").font(.body)
+                            Text(att.filename).font(.subheadline).lineLimit(1)
+                            Image(systemName: "arrow.down.circle")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                } else {
-                    Label(att.filename, systemImage: "doc.fill")
-                        .font(.subheadline).lineLimit(1)
+                    .help("Save \(att.filename)")
                 }
             }
         }
@@ -419,7 +507,8 @@ struct ChatBubble: View {
 
     /// Discord-style hover bar: Reply + quick reacts, floated in the empty gutter
     /// on the leading side (own messages) or trailing side (others) so it never
-    /// covers the bubble text.
+    /// covers the bubble text. The ⋯ exposes the full action sheet (copy, edit,
+    /// moderation) one click anywhere makes discoverable — no right-click hunts.
     private var quickActions: some View {
         HStack(spacing: 6) {
             BubbleBarButton(icon: "arrowshape.turn.up.left", help: "Reply") {
@@ -433,15 +522,35 @@ struct ChatBubble: View {
             BubbleBarButton(icon: "plus.circle", help: "More reactions") {
                 showEmojiPicker = true
             }
+            Menu { menuItems } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More")
         }
         .padding(.horizontal, 7).padding(.vertical, 4)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
         .shadow(color: .black.opacity(0.16), radius: 8, y: 2)
+        // The bar floats outside the row's hover zone in the gutter; keep it
+        // alive while the pointer is over it so it can't vanish mid-click.
+        .onHover { hovered = $0 }
+        .contextMenu { menuItems }
     }
 
-    private func react(_ emoji: String) {
-        model.toggleReaction(message: message, emoji: Emoji(id: nil, name: emoji), on: channelID)
+    /// The emoji of the guild this bubble belongs to, for the reaction picker.
+    private var currentGuildEmojis: [Emoji] {
+        guard let gid = model.channel(with: channelID)?.guildId else { return [] }
+        return model.guilds.first { $0.id == gid }?.emojis ?? []
+    }
+
+    private func react(_ emoji: Emoji) {
+        model.toggleReaction(message: message, emoji: emoji, on: channelID)
     }
 
     private var messageLink: String {
@@ -505,7 +614,10 @@ struct ChatBubble: View {
         }
     }
 
-    @ViewBuilder private var contextMenu: some View {
+    /// The full per-message action sheet, shared between the right-click
+    /// context menu and the ⋯ button on the hover bar — so moderation can never
+    /// be hiding in a place you wouldn't think to look.
+    @ViewBuilder private var menuItems: some View {
         Button { model.beginReply(to: message, in: channelID) } label: {
             Label("Reply", systemImage: "arrowshape.turn.up.left")
         }
@@ -531,6 +643,11 @@ struct ChatBubble: View {
             NSPasteboard.general.setString("\(messageLink)", forType: .string)
         } label: {
             Label("Copy Link", systemImage: "link")
+        }
+        if let att = message.attachments?.first, let url = att.mediaURL {
+            Button { saveRemoteFile(url: url, filename: att.filename) } label: {
+                Label("Save Attachment…", systemImage: "square.and.arrow.down")
+            }
         }
         if isModeratable {
             Divider()
@@ -568,6 +685,184 @@ struct ChatBubble: View {
             .font(.footnote).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, 4)
+    }
+}
+
+/// Downloads an attachment's bytes after the user picks where (native
+/// NSSavePanel). Shared by the attachment buttons and the context menu.
+/// Main-actor safe: the panel runs there; the network fetch is off-thread.
+@MainActor
+func saveRemoteFile(url: URL, filename: String) {
+    let panel = NSSavePanel()
+    panel.canCreateDirectories = true
+    panel.nameFieldStringValue = filename
+    let response = panel.runModal()
+    guard response == .OK, let dest = panel.url else { return }
+    Task {
+        do {
+            Diag.app("saving \(filename): GET \(url.absoluteString)")
+            let (data, _) = try await URLSession.shared.data(from: url)
+            try data.write(to: dest)
+            Diag.app("saved \(filename) (\(data.count) bytes)")
+            NSSound.beep()
+        } catch {
+            Diag.app("failed to save \(filename): \(error.localizedDescription)", .error)
+        }
+    }
+}
+
+/// An inline video player for mp4/mov attachments and pasted video URLs.
+/// Muted, click-to-play — the system controller brings playback controls.
+/// Wraps AppKit's `AVPlayerView`; SwiftUI's `VideoPlayer` bridge crashes
+/// (SIGABRT in `_AVKit_SwiftUI` metadata init), so it's deliberately avoided.
+struct VideoAttachmentView: View {
+    let url: URL
+    let title: String
+    /// GIF-style embeds auto-play muted and loop, matching how Discord shows
+    /// a gifv/mp4 sent through the built-in GIF picker.
+    var autoLoop = false
+    @State private var player: AVPlayer?
+
+    private static let aspect: CGFloat = 16.0 / 9.0
+
+    var body: some View {
+        Group {
+            if let player {
+                if autoLoop {
+                    NativeVideoPlayer(player: player, autoLoop: true)
+                        .onAppear {
+                            player.isMuted = true
+                            player.play()
+                        }
+                } else {
+                    NativeVideoPlayer(player: player)
+                }
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(.quaternary)
+                    Button {
+                        let p = AVPlayer(url: url)
+                        p.isMuted = autoLoop
+                        player = p
+                        if autoLoop { p.play() }
+                    } label: {
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 44))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(Palette.accent)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Play \(title)")
+                }
+            }
+        }
+        .frame(maxWidth: 560, maxHeight: 360)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contextMenu {
+            Button { saveRemoteFile(url: url, filename: title) } label: {
+                Label("Save Video…", systemImage: "square.and.arrow.down")
+            }
+        }
+    }
+}
+
+/// AppKit-hosted player view. Kept dumb on purpose — a loop observer for
+/// GIF-style embeds is the only customization.
+struct NativeVideoPlayer: NSViewRepresentable {
+    let player: AVPlayer
+    var autoLoop = false
+
+    func makeCoordinator() -> Coordinator { Coordinator(player, autoLoop) }
+
+    final class Coordinator: NSObject {
+        let player: AVPlayer
+        let autoLoop: Bool
+        private var observer: NSObjectProtocol?
+
+        init(_ player: AVPlayer, _ autoLoop: Bool) {
+            self.player = player
+            self.autoLoop = autoLoop
+            super.init()
+        }
+
+        func installLoop() {
+            guard autoLoop, observer == nil, let item = player.currentItem else { return }
+            let name = AVPlayerItem.didPlayToEndTimeNotification
+            observer = NotificationCenter.default.addObserver(forName: name, object: item, queue: .main) {
+                [weak self] _ in
+                guard let self else { return }
+                self.player.seek(to: .zero) { _ in self.player.play() }
+            }
+        }
+
+        deinit {
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+        }
+    }
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.player = player
+        view.controlsStyle = .inline
+        view.videoGravity = .resizeAspect
+        context.coordinator.installLoop()
+        return view
+    }
+
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        nsView.player = player
+    }
+}
+
+/// A `SPOILER_`-prefixed image attachment: blurred and locked until tapped,
+/// then it renders normally. Matches Discord's blur-squint-reveal behaviour.
+struct SpoilerMediaAttachment: View {
+    let url: URL
+    let isGIF: Bool
+    let size: CGSize
+    @State private var revealed = false
+
+    var body: some View {
+        ZStack {
+            Group {
+                if isGIF {
+                    GIFImage(url: url, maxWidth: size.width)
+                } else {
+                    AsyncImage(url: url) { phase in
+                        if let img = phase.image {
+                            img.resizable().scaledToFill()
+                        } else {
+                            RoundedRectangle(cornerRadius: 12).fill(.quaternary)
+                        }
+                    }
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            .blur(radius: revealed ? 0 : 26)
+
+            if !revealed {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.quaternary.opacity(0.72))
+                    .overlay {
+                        VStack(spacing: 6) {
+                            Image(systemName: "eye.slash")
+                                .font(.title2).foregroundStyle(.secondary)
+                            Text("Spoiler")
+                                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(width: size.width, height: size.height)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.snappy(duration: 0.22)) { revealed = true }
+                    }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .compositingGroup()
     }
 }
 
@@ -661,5 +956,48 @@ struct DaySeparator: View {
         if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
         let f = DateFormatter(); f.dateFormat = "EEEE, MMM d"
         return f.string(from: date)
+    }
+}
+
+/// A sticker inside a message bubble. Format 4 is a real GIF (animated); the
+/// rest are PNG/APNG/LOTTIE, which the CDN serves as a PNG still. Sticker-only
+/// messages grow it large, otherwise it sits as a row beneath the text.
+struct StickerThumb: View {
+    let item: StickerItem
+    var large = false
+
+    private var size: CGFloat { large ? 160 : 64 }
+
+    var body: some View {
+        Group {
+            if let url = item.imageURL {
+                if item.formatType == 4 {
+                    GIFImage(url: url, maxWidth: size)
+                } else {
+                    AsyncImage(url: url) { phase in
+                        if let image = phase.image {
+                            image.resizable().scaledToFit()
+                        } else if phase.error != nil {
+                            placeholder
+                        } else {
+                            placeholder.overlay(ProgressView().controlSize(.small))
+                        }
+                    }
+                    .frame(width: size, height: size)
+                }
+            } else {
+                placeholder
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .help(item.name ?? "Sticker")
+    }
+
+    private var placeholder: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(Color.primary.opacity(0.07))
+            .frame(width: size, height: size)
+            .overlay(Image(systemName: "face.smiling").foregroundStyle(.secondary))
     }
 }

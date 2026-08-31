@@ -42,6 +42,8 @@ struct ReadyData: Decodable {
     var readState: RawJSON?
     /// Guild IDs in the order Discord has saved for this account (may be empty).
     var guildOrder: [Snowflake] = []
+    /// Server folders as grouped in the official client (name/color/guild IDs).
+    var guildFolders: [GuildOrderProto.GuildFolder] = []
     /// channelID -> last message the user has read.
     var lastReadByChannel: [Snowflake: Snowflake] = [:]
     /// channelID -> unread mention count, Discord's authoritative badge state.
@@ -67,6 +69,7 @@ struct ReadyData: Decodable {
         readState = try? c.decodeIfPresent(RawJSON.self, forKey: .readState)
         if let proto = try? c.decodeIfPresent(String.self, forKey: .userSettingsProto) {
             guildOrder = GuildOrderProto.order(fromBase64: proto)
+            guildFolders = GuildOrderProto.folders(fromBase64: proto)
         }
         // read_state arrives either as a bare array or wrapped in {entries:[…]}.
         if let raw = readState?.data,

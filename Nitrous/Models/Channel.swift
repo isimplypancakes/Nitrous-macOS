@@ -47,7 +47,8 @@ struct Channel: Codable, Identifiable, Hashable {
     var isTextLike: Bool {
         switch type {
         case .guildText, .guildAnnouncement, .dm, .groupDM,
-             .publicThread, .privateThread, .announcementThread:
+             .publicThread, .privateThread, .announcementThread,
+             .guildForum:
             return true
         default: return false
         }

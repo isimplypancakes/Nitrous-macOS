@@ -311,12 +311,14 @@ final class DiscordREST {
         _ = try await send(makeRequest(favorited ? "PUT" : "DELETE", "/gif-picker/favorites/\(id)"))
     }
 
-    func sendMessage(channelID: Snowflake, content: String, nonce: String? = nil, replyTo: Snowflake? = nil) async throws -> Message {
+    func sendMessage(channelID: Snowflake, content: String, nonce: String? = nil,
+                     replyTo: Snowflake? = nil, stickerIDs: [Snowflake]? = nil) async throws -> Message {
         var payload: [String: Any] = ["content": content, "tts": false]
         if let nonce { payload["nonce"] = nonce }
         if let replyTo {
             payload["message_reference"] = ["message_id": replyTo, "channel_id": channelID]
         }
+        if let stickerIDs { payload["sticker_ids"] = stickerIDs }
         let body = try JSONSerialization.data(withJSONObject: payload)
         let data = try await send(makeRequest("POST", "/channels/\(channelID)/messages", body: body))
         return try decoder.decode(Message.self, from: data)
@@ -325,13 +327,15 @@ final class DiscordREST {
     /// Sends a message with file attachments using multipart/form-data.
     func sendMessage(channelID: Snowflake, content: String,
                      attachments: [(filename: String, data: Data, mime: String)],
-                     nonce: String? = nil, replyTo: Snowflake? = nil) async throws -> Message {
+                     nonce: String? = nil, replyTo: Snowflake? = nil,
+                     stickerIDs: [Snowflake]? = nil) async throws -> Message {
         let boundary = "----NitrousBoundary\(UUID().uuidString)"
         var payload: [String: Any] = ["content": content, "tts": false]
         if let nonce { payload["nonce"] = nonce }
         if let replyTo {
             payload["message_reference"] = ["message_id": replyTo, "channel_id": channelID]
         }
+        if let stickerIDs { payload["sticker_ids"] = stickerIDs }
         // Discord wants an `attachments` manifest matching the file parts.
         payload["attachments"] = attachments.enumerated().map { i, a in
             ["id": "\(i)", "filename": a.filename]

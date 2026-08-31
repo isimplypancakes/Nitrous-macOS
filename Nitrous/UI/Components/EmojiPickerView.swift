@@ -1,14 +1,26 @@
 import SwiftUI
 
-/// Searchable sheet of every emoji in the shortcode table, for reactions.
-/// Selecting one calls `onPick` with the unicode emoji and dismisses.
+/// Searchable sheet of emoji for reactions and the composer: the current
+/// guild's custom emoji first, then every emoji in the shortcode table.
+/// Selecting one calls `onPick` with the emoji and dismisses.
 struct EmojiPickerView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
-    let onPick: (String) -> Void
+    var guildEmojis: [Emoji] = []
+    let onPick: (Emoji) -> Void
 
-    private var candidates: [(shortcode: String, emoji: String)] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+    private var q: String {
+        query.trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
+    private var customCandidates: [Emoji] {
+        guard !q.isEmpty else { return guildEmojis }
+        return guildEmojis.filter {
+            ($0.name ?? "").contains(q) || ($0.id ?? "").contains(q)
+        }
+    }
+
+    private var unicodeCandidates: [(shortcode: String, emoji: String)] {
         guard !q.isEmpty else { return EmojiShortcodes.all }
         return EmojiShortcodes.all.filter {
             $0.shortcode.contains(q) || $0.emoji.contains(q)
@@ -34,19 +46,59 @@ struct EmojiPickerView: View {
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
 
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 40), spacing: 2)], spacing: 2) {
-                    ForEach(candidates, id: \.shortcode) { item in
-                        Button {
-                            onPick(item.emoji)
-                            dismiss()
-                        } label: {
-                            Text(item.emoji)
-                                .font(.system(size: 22))
-                                .frame(width: 40, height: 40)
-                                .contentShape(Rectangle())
+                VStack(alignment: .leading, spacing: 8) {
+                    if customCandidates.isEmpty && unicodeCandidates.isEmpty {
+                        Text("No matches")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .padding(.vertical, 8)
+                    }
+                    if !customCandidates.isEmpty {
+                        Text("This server")
+                            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 40), spacing: 2)], spacing: 2) {
+                            ForEach(customCandidates, id: \.identifiableID) { emoji in
+                                Button {
+                                    onPick(emoji)
+                                    dismiss()
+                                } label: {
+                                    if let url = emoji.imageURL {
+                                        AsyncImage(url: url) { phase in
+                                            if let img = phase.image {
+                                                img.resizable().scaledToFit()
+                                            } else {
+                                                Color.clear
+                                            }
+                                        }
+                                        .frame(width: 22, height: 22)
+                                        .frame(width: 40, height: 40)
+                                    } else {
+                                        Text(emoji.name ?? "?").font(.system(size: 20))
+                                            .frame(width: 40, height: 40).lineLimit(1)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .help(":\(emoji.name ?? "emoji"):")
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .help(":\(item.shortcode):")
+                    }
+                    Text("Emoji")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 40), spacing: 2)], spacing: 2) {
+                        ForEach(unicodeCandidates, id: \.shortcode) { item in
+                            Button {
+                                onPick(Emoji(id: nil, name: item.emoji))
+                                dismiss()
+                            } label: {
+                                Text(item.emoji)
+                                    .font(.system(size: 22))
+                                    .frame(width: 40, height: 40)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help(":\(item.shortcode):")
+                        }
                     }
                 }
                 .padding(4)

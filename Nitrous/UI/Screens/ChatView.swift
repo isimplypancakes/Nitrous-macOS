@@ -128,7 +128,12 @@ struct ChatView: View {
             GIFPickerView(channel: channel)
         }
         .popover(isPresented: $showEmojiPicker, arrowEdge: .bottom) {
-            EmojiPickerView { emoji in insertEmojiFromPicker(emoji) }
+            EmojiPickerView(guildEmojis: guildForMentions?.emojis ?? []) { emoji in insertEmojiFromPicker(emoji) }
+        }
+        .popover(isPresented: $showStickerPicker, arrowEdge: .bottom) {
+            StickerPickerView(stickers: guildForMentions?.stickers ?? []) { sticker in
+                model.sendSticker(channelID: channel.id, sticker: sticker)
+            }
         }
         .safeAreaInset(edge: .bottom) { composer }
         .fileImporter(isPresented: $showFileImporter,
@@ -225,6 +230,7 @@ struct ChatView: View {
     @State private var profileUser: DiscordUser?
     @State private var showGIFPicker = false
     @State private var showEmojiPicker = false
+    @State private var showStickerPicker = false
     @State private var showChannelSearch = false
 
     /// One continuous glass surface: reply/edit context, staged attachments and
@@ -241,7 +247,7 @@ struct ChatView: View {
             }
             if !mentionCandidates.isEmpty {
                 mentionSuggestions
-            } else if !emojiMatches.isEmpty {
+            } else if !emojiMatches.isEmpty || !customEmojiMatches.isEmpty {
                 emojiSuggestions
             }
 
@@ -267,8 +273,13 @@ struct ChatView: View {
                             .onChange(of: text) {
                                 emitTyping()
                                 // Composer-side `:sob:` → 😭 so the preview matches
-                                // what renders in the bubble.
-                                text = EmojiShortcodes.expand(in: text)
+                                // what renders in the bubble. Scanning and rewriting
+                                // the whole buffer on EVERY keystroke made typing
+                                // visibly lag — only when a token could exist do we
+                                // touch the field (and only if it actually changed).
+                                guard text.contains(":") else { return }
+                                let expanded = EmojiShortcodes.expand(in: text)
+                                if expanded != text { text = expanded }
                             }
                             // Return sends, Shift+Return is a newline — the native
                             // Messages.app contract. Only applies while inside this
@@ -326,6 +337,14 @@ struct ChatView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .help("Emoji")
+                                if !(guildForMentions?.stickers ?? []).isEmpty {
+                                    Button { showStickerPicker = true } label: {
+                                        Image(systemName: "sticker")
+                                            .font(.system(size: 22)).foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Stickers")
+                                }
                             }
                             .padding(.trailing, 12).padding(.bottom, 7)
                         }
@@ -334,6 +353,28 @@ struct ChatView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
+                // Right-click anywhere on the composer pane pastes what's on the
+                // clipboard: images into the attachment tray, text into the field.
+                .contextMenu {
+                    Button {
+                        let objects = NSPasteboard.general.readObjects(
+                            forClasses: [NSImage.self, NSURL.self], options: nil) ?? []
+                        if let image = objects.compactMap({ $0 as? NSImage }).first {
+                            model.stageImage(image, in: channel.id)
+                        } else if let file = objects.compactMap({ $0 as? NSURL }).first {
+                            let url = file as URL
+                            guard let data = try? Data(contentsOf: url) else { return }
+                            let ext = url.pathExtension
+                            let mime = UTType(filenameExtension: ext)?.preferredMIMEType
+                                ?? ((url.isImage == true) ? "image/png" : "application/octet-stream")
+                            model.stage(.init(filename: url.lastPathComponent, data: data, mime: mime),
+                                        in: channel.id)
+                        }
+                    } label: {
+                        Label("Paste Image", systemImage: "photo.on.rectangle.angled")
+                    }
+                    .disabled(!pasteboardHasImage)
+                }
             } else {
                 lockedChatBar
             }
@@ -344,6 +385,43 @@ struct ChatView: View {
     private var canSend: Bool {
         !text.trimmingCharacters(in: .whitespaces).isEmpty
             || !(model.pendingAttachments[channel.id]?.isEmpty ?? true)
+    }
+
+    private var pasteboardHasImage: Bool {
+        NSPasteboard.general.types?.contains { t in
+            (UTType(t.rawValue)?.conforms(to: .image)) == true
+        } ?? false
+    }
+
+    // MARK: Custom (server) emoji autocomplete
+
+    private struct CustomEmojiCandidate: Identifiable {
+        let id: String
+        let name: String
+        let animated: Bool
+        let url: URL?
+        /// Discord's markup for a custom emoji; Discord renders the image,
+        /// Nitrous shows the `:name:` shortcode in the bubble preview.
+        var token: String { "\(animated ? "<a:" : "<:")\(name):\(id)> " }
+    }
+
+    /// Guild emojis matching the trailing `:partial`, shown ahead of the
+    /// built-in shortcode list when they match.
+    private var customEmojiMatches: [CustomEmojiCandidate] {
+        guard let partial = emojiPartial, let guild = guildForMentions else { return [] }
+        return (guild.emojis ?? [])
+            .filter { ($0.name ?? "").lowercased().hasPrefix(partial) }
+            .compactMap { e -> CustomEmojiCandidate? in
+                guard let name = e.name, let id = e.id else { return nil }
+                return .init(id: id, name: name, animated: e.animated ?? false, url: e.imageURL)
+            }
+            .prefix(6)
+            .map { $0 }
+    }
+
+    private func insertCustomEmoji(_ c: CustomEmojiCandidate) {
+        guard let r = text.range(of: #":[A-Za-z0-9_+\-]+$"#, options: .regularExpression) else { return }
+        text.replaceSubrange(r, with: c.token)
     }
 
     // MARK: Emoji autocomplete
@@ -373,9 +451,15 @@ struct ChatView: View {
     }
 
     /// Inserts an emoji picked from the popover straight into the composer.
-    private func insertEmojiFromPicker(_ emoji: String) {
+    /// Custom emoji become their `<:name:id>` token so Discord renders the
+    /// image; unicode emoji are inserted literally.
+    private func insertEmojiFromPicker(_ emoji: Emoji) {
         if !text.isEmpty && !text.hasSuffix(" ") { text.append(" ") }
-        text.append(emoji)
+        if let id = emoji.id, let name = emoji.name {
+            text.append((emoji.animated ?? false ? "<a:" : "<:") + name + ":" + id + ">")
+        } else if let name = emoji.name {
+            text.append(name)
+        }
         text.append(" ")
         composerFocused = true
     }
@@ -383,6 +467,24 @@ struct ChatView: View {
     private var emojiSuggestions: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 5) {
+                ForEach(customEmojiMatches) { match in
+                    Button { insertCustomEmoji(match) } label: {
+                        HStack(spacing: 5) {
+                            AsyncImage(url: match.url) { phase in
+                                if let img = phase.image {
+                                    img.resizable().scaledToFit().frame(width: 18, height: 18)
+                                } else {
+                                    Text(match.animated ? "🎭" : "😀").font(.body)
+                                }
+                            }
+                            Text(":\(match.name):")
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                }
                 ForEach(emojiMatches, id: \.shortcode) { match in
                     Button { insertEmoji(match.shortcode) } label: {
                         HStack(spacing: 5) {

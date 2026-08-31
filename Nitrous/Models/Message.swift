@@ -18,6 +18,12 @@ struct Message: Codable, Identifiable, Hashable {
     var type: Int?
     var referencedMessage: Box<Message>?
     var nonce: String?
+    /// Stickers attached to the message (Discord renders them below the text).
+    var stickerItems: [StickerItem]?
+    /// Present on messages a bot app sent via a slash command.
+    var interaction: MessageInteraction?
+    /// The channel object Discord embeds when a message *creates* a thread.
+    var thread: Channel?
 
     var date: Date? { DiscordTime.parse(timestamp) }
     var editedDate: Date? { DiscordTime.parse(editedTimestamp) }
@@ -28,6 +34,26 @@ struct Message: Codable, Identifiable, Hashable {
         guard let type else { return false }
         return ![0, 19].contains(type) // 0 default, 19 reply
     }
+}
+
+/// A sticker on a message. `formatType` drives which CDN file we request:
+/// 1 PNG, 2 APNG, 3 LOTTIE (rendered as a PNG still), 4 GIF.
+struct StickerItem: Codable, Hashable, Identifiable {
+    let id: Snowflake
+    var name: String?
+    var formatType: Int?
+    var packId: Snowflake?
+    var isAvailable: Bool?
+
+    var imageURL: URL? { CDN.sticker(id: id, formatType: formatType) }
+}
+
+/// The `interaction` block on messages sent through an app's slash command.
+struct MessageInteraction: Codable, Hashable {
+    var id: Snowflake?
+    var name: String?
+    var type: Int?
+    var user: DiscordUser?
 }
 
 /// Boxed indirection so `Message` can reference another `Message` (value type recursion).

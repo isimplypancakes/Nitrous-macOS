@@ -79,6 +79,14 @@ enum DiscordMarkdown {
         return nil
     }
 
+    /// True when a string carries a `:name:` custom emoji token. Used to swap
+    /// the plain text render for the image-aware flow renderer.
+    static func containsCustomEmoji(_ s: String) -> Bool {
+        guard s.contains("<a:") || s.contains("<:") else { return false }
+        guard let re = try? NSRegularExpression(pattern: "<a?:[A-Za-z0-9_]+:[0-9]+>") else { return false }
+        return re.firstMatch(in: s, options: [], range: NSRange(s.startIndex..., in: s)) != nil
+    }
+
     // MARK: Inline
 
     /// Inline render: mentions/emoji/spoilers + AttributedString markdown.
@@ -104,6 +112,15 @@ enum DiscordMarkdown {
             spoilers.append(inner); return inner
         }
 
+        // Discord's `__underline__` must survive the markdown parser, which
+        // would otherwise read the underscores as bold. Pull each pair out,
+        // parse, then restore degree runs with an underline attribute.
+        var underlines: [String] = []
+        text = replaceMatches(text, pattern: "__([^_\\n]+?)__") { inner in
+            underlines.append(inner)
+            return "\u{E000}U\(underlines.count)\u{E001}"
+        }
+
         let options = AttributedString.MarkdownParsingOptions(
             allowsExtendedAttributes: true, interpretedSyntax: .inlineOnlyPreservingWhitespace)
         var attr = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
@@ -112,6 +129,9 @@ enum DiscordMarkdown {
         for token in Set(mentions) {
             attr.color(occurrencesOf: token, with: onAccent ? Brand.onAccent : Palette.accent,
                        bold: true, background: onAccent ? nil : Palette.accent.opacity(0.15))
+        }
+        for (index, inner) in underlines.enumerated() {
+            attr.underline(occurrencesOf: "\u{E000}U\(index + 1)\u{E001}", replacingWith: inner)
         }
         // Masked until revealed.
         if !revealSpoilers {
@@ -152,6 +172,18 @@ extension AttributedString {
             if bold { self[r].font = .body.weight(.semibold) }
             if let background { self[r].backgroundColor = background }
             start = r.upperBound
+        }
+    }
+
+    /// Swaps a parser-protection marker back to its real text, underlined.
+    /// The attribute survives the Text renderer on macOS 13+.
+    mutating func underline(occurrencesOf marker: String, replacingWith inner: String) {
+        guard let r = range(of: marker) else { return }
+        let lower = r.lowerBound
+        let upper = r.upperBound
+        self.replaceSubrange(lower..<upper, with: AttributedString(inner))
+        if let after = self[lower..<endIndex].range(of: inner) {
+            self[after].underlineStyle = Text.LineStyle(pattern: .solid)
         }
     }
 }
@@ -197,21 +229,46 @@ struct MarkdownContent: View {
     private func view(for block: DiscordMarkdown.Block) -> some View {
         switch block {
         case .heading(let level, let raw):
-            Text(inline(raw))
-                .font(headingFont(level))
-                .foregroundStyle(level == 4 ? AnyShapeStyle(.secondary) : AnyShapeStyle(onAccent ? Brand.onAccent : Palette.label))
-                .padding(.top, level <= 3 ? 2 : 0)
-        case .paragraph(let raw):
-            Text(inline(raw)).font(.body)
-        case .quote(let raw):
-            HStack(alignment: .top, spacing: 8) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(onAccent ? Brand.onAccent.opacity(0.6) : Palette.accent)
-                    .frame(width: 3)
-                Text(inline(raw)).font(.body)
-                    .foregroundStyle(onAccent ? AnyShapeStyle(Brand.onAccent.opacity(0.75)) : AnyShapeStyle(.secondary))
+            if DiscordMarkdown.containsCustomEmoji(raw) {
+                EmojiFlowText(raw: raw, message: message, onAccent: onAccent,
+                              font: headingFont(level), revealed: revealed,
+                              color: level == 4 ? .secondary : (onAccent ? Brand.onAccent : Palette.label))
+            } else {
+                Text(inline(raw))
+                    .font(headingFont(level))
+                    .foregroundStyle(level == 4 ? AnyShapeStyle(.secondary) : AnyShapeStyle(onAccent ? Brand.onAccent : Palette.label))
+                    .padding(.top, level <= 3 ? 2 : 0)
+                    .textSelection(.enabled)
             }
-            .fixedSize(horizontal: false, vertical: true)
+        case .paragraph(let raw):
+            if DiscordMarkdown.containsCustomEmoji(raw) {
+                EmojiFlowText(raw: raw, message: message, onAccent: onAccent,
+                              font: .body, revealed: revealed)
+            } else {
+                Text(inline(raw)).font(.body).textSelection(.enabled)
+            }
+        case .quote(let raw):
+            if DiscordMarkdown.containsCustomEmoji(raw) {
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(onAccent ? Brand.onAccent.opacity(0.6) : Palette.accent)
+                        .frame(width: 3)
+                    EmojiFlowText(raw: raw, message: message, onAccent: onAccent,
+                                  font: .body, revealed: revealed,
+                                  color: onAccent ? Brand.onAccent.opacity(0.75) : .secondary)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            } else {
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(onAccent ? Brand.onAccent.opacity(0.6) : Palette.accent)
+                        .frame(width: 3)
+                    Text(inline(raw)).font(.body)
+                        .foregroundStyle(onAccent ? AnyShapeStyle(Brand.onAccent.opacity(0.75)) : AnyShapeStyle(.secondary))
+                        .textSelection(.enabled)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
         case .code(let body):
             Text(body)
                 .font(.system(.footnote, design: .monospaced))
@@ -233,6 +290,90 @@ struct MarkdownContent: View {
         case 2: return .title3.bold()
         case 3: return .headline
         default: return .caption   // -# subtext
+        }
+    }
+}
+
+/// Word-wrapping renderer for message text that contains server emoji. Custom
+/// emoji tokens are split out and drawn as inline CDN images; everything else
+/// stays plain Text so mentions, spoilers and markdown keep working. Wrapping
+/// happens per word (via `FlowLayout`), which is what lets the images sit
+/// inline with the text instead of tunnelling the whole line through one Text.
+struct EmojiFlowText: View {
+    @EnvironmentObject var model: AppModel
+    let raw: String
+    let message: Message
+    let onAccent: Bool
+    let font: Font
+    let revealed: Bool
+    var color: Color = .primary
+
+    private enum Chunk: Identifiable {
+        case word(String)
+        case emoji(name: String, animated: Bool, id: String)
+
+        var id: String {
+            switch self {
+            case .word(let w): return "w\(w)"
+            case .emoji(let name, let animated, let id): return "e\(animated ? "a" : "")\(id)\(name)"
+            }
+        }
+    }
+
+    private var chunks: [Chunk] {
+        guard let re = try? NSRegularExpression(pattern: #"(<a?:[A-Za-z0-9_]+:[0-9]+>|\s+)"#) else {
+            return words(from: raw)
+        }
+        let ns = raw as NSString
+        var out: [Chunk] = []; var last = 0
+        re.enumerateMatches(in: raw, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
+            guard let m else { return }
+            if m.range.location > last {
+                out += words(from: ns.substring(with: NSRange(location: last, length: m.range.location - last)))
+            }
+            let segment = ns.substring(with: m.range)
+            if segment.hasPrefix("<"), let t = try? NSRegularExpression(pattern: #"^<a?:([A-Za-z0-9_]+):([0-9]+)>$"#),
+               let tm = t.firstMatch(in: segment, options: [], range: NSRange(location: 0, length: segment.count)) {
+                out.append(.emoji(name: (segment as NSString).substring(with: tm.range(at: 1)),
+                                  animated: segment.hasPrefix("<a:"),
+                                  id: (segment as NSString).substring(with: tm.range(at: 2))))
+            } // whitespace-only segments add no chunk; FlowLayout spacing stands in.
+            last = m.range.location + m.range.length
+        }
+        if last < ns.length { out += words(from: ns.substring(from: last)) }
+        return out
+    }
+
+    private func words(from s: String) -> [Chunk] {
+        s.split(separator: " ").filter { !$0.isEmpty }.map { .word(String($0)) }
+    }
+
+    var body: some View {
+        FlowLayout(spacing: 4) {
+            ForEach(chunks) { chunk in
+                switch chunk {
+                case .word(let w):
+                    Text(DiscordMarkdown.inline(w, model: model, message: message,
+                                               onAccent: onAccent, revealSpoilers: revealed))
+                        .font(font)
+                        .foregroundStyle(color)
+                        .frame(maxWidth: 190, alignment: .leading)
+                case .emoji(let name, let animated, let id):
+                    if let url = CDN.emoji(id: Snowflake(id), animated: animated) {
+                        AsyncImage(url: url) { phase in
+                            if let img = phase.image {
+                                img.resizable().scaledToFit()
+                            } else {
+                                Color.clear.frame(width: 20, height: 20)
+                            }
+                        }
+                        .frame(width: 20, height: 20)
+                        .padding(.bottom, 1)
+                        .accessibilityLabel(":\(name):")
+                        .help(":\(name):")
+                    }
+                }
+            }
         }
     }
 }

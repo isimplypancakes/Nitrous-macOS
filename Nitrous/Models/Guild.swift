@@ -15,6 +15,7 @@ struct Guild: Codable, Identifiable, Hashable {
     var channels: [Channel]?
     var roles: [Role]?
     var emojis: [Emoji]?
+    var stickers: [GuildSticker]?
     var memberCount: Int?
     var members: [GuildMember]?
     var features: [String]?
@@ -36,7 +37,7 @@ struct Guild: Codable, Identifiable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, icon, banner, ownerId, channels, roles, emojis, memberCount, members, properties, features
+        case id, name, icon, banner, ownerId, channels, roles, emojis, stickers, memberCount, members, properties, features
     }
 
     /// The nested form used by the user gateway.
@@ -65,16 +66,17 @@ struct Guild: Codable, Identifiable, Hashable {
         channels = c.decodeLossyArray(Channel.self, forKey: .channels)
         roles = c.decodeLossyArray(Role.self, forKey: .roles)
         emojis = c.decodeLossyArray(Emoji.self, forKey: .emojis)
+        stickers = c.decodeLossyArray(GuildSticker.self, forKey: .stickers)
         features = c.decodeLossyArray(String.self, forKey: .features)
         memberCount = try? c.decodeIfPresent(Int.self, forKey: .memberCount)
     }
 
     init(id: Snowflake, name: String, icon: String? = nil, banner: String? = nil,
          ownerId: Snowflake? = nil, channels: [Channel]? = nil, roles: [Role]? = nil,
-         emojis: [Emoji]? = nil, memberCount: Int? = nil, members: [GuildMember]? = nil) {
+         emojis: [Emoji]? = nil, stickers: [GuildSticker]? = nil, memberCount: Int? = nil, members: [GuildMember]? = nil) {
         self.id = id; self.name = name; self.icon = icon; self.banner = banner
         self.ownerId = ownerId; self.channels = channels; self.roles = roles
-        self.emojis = emojis; self.memberCount = memberCount; self.members = members
+        self.emojis = emojis; self.stickers = stickers; self.memberCount = memberCount; self.members = members
     }
 
     func encode(to encoder: Encoder) throws {
@@ -87,6 +89,7 @@ struct Guild: Codable, Identifiable, Hashable {
         try c.encodeIfPresent(channels, forKey: .channels)
         try c.encodeIfPresent(roles, forKey: .roles)
         try c.encodeIfPresent(emojis, forKey: .emojis)
+        try c.encodeIfPresent(stickers, forKey: .stickers)
         try c.encodeIfPresent(memberCount, forKey: .memberCount)
         try c.encodeIfPresent(members, forKey: .members)
         try c.encodeIfPresent(features, forKey: .features)
@@ -132,6 +135,29 @@ struct Emoji: Codable, Identifiable, Hashable {
     var identifiableID: String { id ?? name ?? UUID().uuidString }
     var id2: String { identifiableID }
     var imageURL: URL? { CDN.emoji(id: id, animated: animated ?? false) }
+}
+
+/// A guild sticker, decoded from GUILD_CREATE so the composer can offer the
+/// server's own sticker sheet alongside the emoji picker.
+struct GuildSticker: Codable, Identifiable, Hashable {
+    let id: Snowflake
+    var name: String
+    var formatType: Int?
+    var available: Bool?
+
+    init(id: Snowflake, name: String, formatType: Int? = nil, available: Bool? = nil) {
+        self.id = id; self.name = name; self.formatType = formatType; self.available = available
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Snowflake.self, forKey: .id)
+        name = (try? c.decodeIfPresent(String.self, forKey: .name)) as? String ?? "sticker"
+        formatType = try? c.decodeIfPresent(Int.self, forKey: .formatType)
+        available = try? c.decodeIfPresent(Bool.self, forKey: .available)
+    }
+
+    var imageURL: URL? { CDN.sticker(id: id, formatType: formatType) }
 }
 
 /// Minimal unavailable-guild marker from READY before GUILD_CREATE fills it in.

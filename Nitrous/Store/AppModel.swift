@@ -58,6 +58,9 @@ final class AppModel: ObservableObject {
     @Published var usersCache: [Snowflake: DiscordUser] = [:]
     /// Discord's saved sidebar order, used to sort `guilds`.
     private var savedGuildOrder: [Snowflake] = []
+    /// Server folders from the official client; the rail renders one capsule per
+    /// folder and leaves unfiled servers as individual icons.
+    @Published private(set) var guildFolders: [GuildOrderProto.GuildFolder] = []
     /// Last-read message per channel, used to show unread indicators.
     @Published var lastRead: [Snowflake: Snowflake] = [:]
     /// Channels holding a message that **pings me** and that I haven't opened
@@ -122,25 +125,26 @@ final class AppModel: ObservableObject {
         return nil
     }
 
-    /// Whether the signed-in user may post text in `channel`. DMs always allow.
-    /// Guild channels run Discord's permission algorithm against the cached
-    /// roles, the member's roles, and the channel overwrites. Badly-locked
-    /// outputs trend to "no" (never grant something we can't prove).
-    func canSendMessages(in channel: Channel) -> Bool {
-        guard let guildID = channel.guildId,
-              let guild = guilds.first(where: { $0.id == guildID }),
-              let me = user?.id else {
-            return true // DM / group DM
-        }
-        guard channel.isTextLike else { return false }
+    /// Discord's permission algorithm for the signed-in user in a channel:
+    /// @everyone base OR'd with every role the user holds, then channel
+    /// overwrites (roles highest-position first, then the member's own, which
+    /// wins last). A channel with a parent category inherits the category's
+    /// overwrites first — Discord resolves permissions top-down — which is what
+    /// actually hides channels sat under a locked category. The guild owner
+    /// bypasses every rule, like Discord. Guilds that fail to resolve resolve
+    /// to 0 — never grant something we can't prove. DMs return everything.
+    private func permissionBits(in channel: Channel) -> UInt64 {
+        guard let guildID = channel.guildId else { return UInt64.max }
+        guard let guild = guilds.first(where: { $0.id == guildID }),
+              let me = user?.id else { return 0 }
+        if guild.ownerId == me { return UInt64.max }
         let roles = guild.roles ?? []
-        let everyoneID = guildID
+        let guildChannels = channelsByGuild[guildID] ?? []
 
         var myRoleIDs = guild.members?.first { $0.user?.id == me }?.roles ?? []
-        if !myRoleIDs.contains(everyoneID) { myRoleIDs.append(everyoneID) }
+        if !myRoleIDs.contains(guildID) { myRoleIDs.append(guildID) }
 
-        // Start from the @everyone base, OR in every role the user holds.
-        var bits = roles.first { $0.id == everyoneID }?.permissions.flatMap(UInt64.init) ?? 0
+        var bits = roles.first { $0.id == guildID }?.permissions.flatMap(UInt64.init) ?? 0
         for role in roles where myRoleIDs.contains(role.id) {
             if let b = role.permissions.flatMap(UInt64.init) { bits |= b }
         }
@@ -149,24 +153,61 @@ final class AppModel: ObservableObject {
             bits &= ~deny
             bits |= allow
         }
-        // Channel overwrites: the member's roles in position order (highest
-        // first, like Discord), then the member's own overwrite wins last.
-        let overwrites = channel.permissionOverwrites ?? []
-        let orderedRoles = myRoleIDs.map { rid in
-            (rid: rid, position: roles.first { $0.id == rid }?.position ?? -1)
-        }
-        .sorted { $0.position > $1.position }
-        for entry in orderedRoles {
-            if let ow = overwrites.first(where: { $0.id == entry.rid && $0.type == 0 }),
-               let allow = UInt64(ow.allow), let deny = UInt64(ow.deny) {
+        func applyOverwrite(_ ow: Channel.Overwrite) {
+            if let allow = UInt64(ow.allow), let deny = UInt64(ow.deny) {
                 apply(allow, deny)
             }
         }
-        if let my = overwrites.first(where: { $0.id == me && $0.type == 1 }),
-           let allow = UInt64(my.allow), let deny = UInt64(my.deny) {
-            apply(allow, deny)
-        }
 
+        // A child channel inherits its parent category's rules before its own.
+        let category = channel.parentId.flatMap { cid in
+            guildChannels.first { $0.id == cid }
+        }
+        let catOW = category?.permissionOverwrites ?? []
+        let chanOW = channel.permissionOverwrites ?? []
+
+        // Discord's documented order: guild-level, then @everyone's overwrites
+        // (so a locked channel starts denied), then each role the member holds
+        // by position (a role's allow overrides the @everyone deny), then the
+        // member's own overwrite winning last. Each step applies the category
+        // overwrite before the channel's.
+        if let every = catOW.first(where: { $0.id == guildID && $0.type == 0 }) { applyOverwrite(every) }
+        if let every = chanOW.first(where: { $0.id == guildID && $0.type == 0 }) { applyOverwrite(every) }
+        let orderedRoles = myRoleIDs
+            .filter { $0 != guildID }
+            .map { rid in
+                (rid: rid, position: roles.first { $0.id == rid }?.position ?? -1)
+            }
+            .sorted { $0.position > $1.position }
+        for entry in orderedRoles {
+            if let ow = catOW.first(where: { $0.id == entry.rid && $0.type == 0 }) { applyOverwrite(ow) }
+            if let ow = chanOW.first(where: { $0.id == entry.rid && $0.type == 0 }) { applyOverwrite(ow) }
+        }
+        if let my = catOW.first(where: { $0.id == me && $0.type == 1 }) { applyOverwrite(my) }
+        if let my = chanOW.first(where: { $0.id == me && $0.type == 1 }) { applyOverwrite(my) }
+        return bits
+    }
+
+    /// Runs the same algorithm as `canSendMessages` specifically for the
+    /// VIEW_CHANNEL bit, used to hide channels the user isn't allowed to see.
+    func canView(_ channel: Channel) -> Bool {
+        guard channel.guildId != nil else { return true }
+        guard channel.isTextLike else { return false }
+        let bits = permissionBits(in: channel)
+        if bits == UInt64.max { return true }            // DM
+        if bits & (1 << 3) != 0 { return true }          // ADMINISTRATOR
+        return bits & (1 << 10) != 0                     // VIEW_CHANNEL
+    }
+
+    /// Whether the signed-in user may post text in `channel`. DMs always allow.
+    /// Guild channels run Discord's permission algorithm against the cached
+    /// roles, the member's roles, and the channel overwrites. Badly-locked
+    /// outputs trend to "no" (never grant something we can't prove).
+    func canSendMessages(in channel: Channel) -> Bool {
+        guard channel.guildId != nil else { return true }   // DM / group DM
+        guard channel.isTextLike else { return false }
+        let bits = permissionBits(in: channel)
+        if bits == UInt64.max { return true }
         let admin = bits & (1 << 3) != 0
         let view   = bits & (1 << 10) != 0
         let send   = bits & (1 << 11) != 0
@@ -427,8 +468,12 @@ final class AppModel: ObservableObject {
         reconcilePings(from: ready.mentionCountByChannel)
         savedGuildOrder = ready.guildOrder
         guilds = Self.ordered(ready.guilds, by: savedGuildOrder)
+        guildFolders = ready.guildFolders
         if !savedGuildOrder.isEmpty {
             Diag.app("applied saved guild order (\(savedGuildOrder.count) entries)")
+        }
+        if !guildFolders.isEmpty {
+            Diag.app("applied \(guildFolders.count) server folders")
         }
         membersByGuild = [:]
         for g in ready.guilds {
@@ -878,6 +923,32 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Sends a guild sticker as a message, with a lightweight optimistic echo
+    /// mirroring the way plain sends feel instant.
+    func sendSticker(channelID: Snowflake, sticker: GuildSticker) {
+        guard let rest else { return }
+        let nonce = String(UInt64(Date().timeIntervalSince1970 * 1000))
+        if let me = user {
+            let optimistic = Message(id: "pending-\(nonce)", channelId: channelID, author: me,
+                                     content: "", timestamp: DiscordTime.plainFormatter.string(from: Date()),
+                                     nonce: nonce, stickerItems: [
+                                        StickerItem(id: sticker.id, name: sticker.name,
+                                                    formatType: sticker.formatType,
+                                                    packId: nil, isAvailable: true)
+                                     ])
+            insertMessage(optimistic, dedupe: false)
+        }
+        Task {
+            do {
+                _ = try await rest.sendMessage(channelID: channelID, content: "",
+                                               nonce: nonce, stickerIDs: [sticker.id])
+            } catch {
+                Diag.rest("sticker send failed: \(error.localizedDescription)", .error)
+                messagesByChannel[channelID]?.removeAll { $0.id == "pending-\(nonce)" }
+            }
+        }
+    }
+
     // MARK: Notifications
 
     /// Raises a local notification for the active account when a DM or mention
@@ -935,6 +1006,19 @@ final class AppModel: ObservableObject {
     func unstage(_ id: UUID, in channelID: Snowflake) {
         pendingAttachments[channelID]?.removeAll { $0.id == id }
         if pendingAttachments[channelID]?.isEmpty == true { pendingAttachments[channelID] = nil }
+    }
+
+    /// Stages an image already in hand (right-click → Paste Image): decoded,
+    /// flattened to PNG and dropped in the channel's attachment tray.
+    func stageImage(_ image: NSImage, in channelID: Snowflake) {
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:]) else {
+            Diag.app("paste image: couldn't encode clipboard image", .warn)
+            return
+        }
+        let item = PendingAttachment(filename: "Pasted image.png", data: png, mime: "image/png")
+        stage(item, in: channelID)
     }
 
     /// ⌘V image staging shared by the composer and the window-level fallback.

@@ -12,6 +12,22 @@ enum EmojiShortcodes {
         var replacements: [(NSRange, String)] = []
         re.enumerateMatches(in: text, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
             guard let m else { return }
+            // Never touch a shortcode inside a custom-emoji token like
+            // `<:megusta:123>` — the inner `:name:` would otherwise be swapped
+            // for a unicode emoji and corrupt the CDN reference.
+            if m.range.location > 0 {
+                let prev = ns.substring(with: NSRange(location: m.range.location - 1, length: 1))
+                if prev == "<" { return }
+            }
+            let following = NSRange(location: m.range.location + m.range.length,
+                                    length: ns.length - (m.range.location + m.range.length))
+            if following.length > 0 && following.length <= 24 {
+                let substr = ns.substring(with: following)
+                if let rest = substr.range(of: ">") {
+                    let tail = String(substr[..<rest.lowerBound])
+                    guard !tail.isEmpty && tail.allSatisfy({ $0.isNumber }) else { return }
+                }
+            }
             let name = ns.substring(with: m.range(at: 1)).lowercased()
             if let emoji = table[name] {
                 replacements.append((m.range, emoji))

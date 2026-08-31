@@ -13,6 +13,10 @@ enum MediaLink {
         return host.contains("tenor") || host.contains("giphy") || host.contains("klipy")
     }
 
+    static func isVideo(_ url: URL) -> Bool {
+        ["mp4", "mov", "m4v", "webm", "mkv"].contains(url.pathExtension.lowercased())
+    }
+
     /// Bare http(s) URLs in a message that look like media we can inline.
     static func mediaURLs(in text: String) -> [URL] {
         guard let re = try? NSRegularExpression(pattern: #"https?://[^\s<>"]+"#) else { return [] }
@@ -28,7 +32,8 @@ enum MediaLink {
 
     static func urlIsMedia(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
-        if ["gif", "png", "jpg", "jpeg", "webp", "avif"].contains(ext) { return true }
+        if ["gif", "png", "jpg", "jpeg", "webp", "avif",
+            "mp4", "mov", "m4v", "webm"].contains(ext) { return true }
         let host = (url.host ?? "").lowercased()
         return host.contains("tenor") || host.contains("giphy") || host.contains("klipy")
     }
@@ -92,25 +97,18 @@ struct GIFImage: View {
 
     @MainActor
     private func play() async {
-        guard let data = await GIFStore.data(for: url) else {
+        guard let data = await GIFStore.data(for: url), !data.isEmpty else {
             failed = true
             return
         }
-        guard !staticOnly else {
-            if let ns = NSImage(data: data) {
-                image = ns
-                if aspect == nil {
-                    let size = naturalSize(ns)
-                    if size.width > 0, size.height > 0 { aspect = size.width / size.height }
-                }
-            } else {
-                failed = true
-            }
-            return
-        }
+
+        // Borderline GIFs — a Discord-user GIF hotlinked from a CDN that
+        // answers with a page body, or a truncated download — used to leave
+        // `image` nil while failed stayed false, rendering a spinner forever.
+        // Every decode path below now lands on `failed` instead.
         let anim = GIFStore.animation(for: url, data: data)
-        if let anim {
-            if aspect == nil { aspect = anim.size.width / max(anim.size.height, 1) }
+        if !staticOnly, let anim, !anim.frames.isEmpty {
+            if aspect == nil, anim.size.height > 0 { aspect = anim.size.width / anim.size.height }
             while !Task.isCancelled {
                 for (i, frame) in anim.frames.enumerated() {
                     if Task.isCancelled { return }
@@ -118,19 +116,18 @@ struct GIFImage: View {
                     try? await Task.sleep(nanoseconds: UInt64(anim.delays[i] * 1_000_000_000))
                 }
             }
-        } else if image == nil {
-            image = NSImage(data: data)
-            if let ns = image, ns.size.width > 0, ns.size.height > 0 {
-                if aspect == nil { aspect = ns.size.width / ns.size.height }
-            }
+            return
         }
-    }
 
-    private func naturalSize(_ image: NSImage) -> NSSize {
-        if let rep = image.representations.first, rep.pixelsWide > 0, rep.pixelsHigh > 0 {
-            return NSSize(width: rep.pixelsWide, height: rep.pixelsHigh)
+        // Static decode: single-frame GIFs, and the first frame for grid
+        // thumbnails (`staticOnly`). Anything that isn't a decodable image
+        // fails loudly instead of pinwheeling.
+        if let ns = NSImage(data: data), ns.size.width > 0, ns.size.height > 0 {
+            image = ns
+            if aspect == nil { aspect = ns.size.width / max(ns.size.height, 1) }
+        } else {
+            failed = true
         }
-        return image.size
     }
 }
 

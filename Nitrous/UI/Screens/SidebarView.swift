@@ -13,6 +13,7 @@ struct SidebarView: View {
     @State private var dmsExpanded = false
     @State private var showProfileCard = false
     @State private var openServer: Snowflake?
+    @State private var expandedFolders: Set<String> = []
 
     private var connectionLabel: String {
         switch model.gatewayState {
@@ -77,8 +78,20 @@ struct SidebarView: View {
                         .font(.caption).foregroundStyle(.secondary)
                         .listRowBackground(Color.clear)
                 }
-                ForEach(model.guilds) { guild in
-                    serverPopupButton(guild)
+                ForEach(railItems) { item in
+                    switch item {
+                    case .guild(let guild):
+                        serverPopupButton(guild)
+                    case .folder(let folder):
+                        DisclosureGroup(isExpanded: folderBinding(folder)) {
+                            ForEach(folder.guilds(in: model.guilds)) { guild in
+                                serverPopupButton(guild)
+                            }
+                        } label: {
+                            folderCapsule(folder)
+                        }
+                        .listRowBackground(Color.clear)
+                    }
                 }
             }
         }
@@ -185,6 +198,88 @@ struct SidebarView: View {
     private func serverPopupBinding(_ guild: Guild) -> Binding<Bool> {
         Binding(get: { openServer == guild.id },
                 set: { if !$0 { openServer = nil } })
+    }
+
+    /// One rail entry per item the user can click: an unfiled server as its own
+    /// icon, or a folder capsule. Discord keeps a folder's members consecutive
+    /// in the saved order, so emitting the folder and skipping its members to
+    /// the right reconstructs the rail exactly.
+    enum RailItem: Identifiable {
+        case guild(Guild)
+        case folder(GuildOrderProto.GuildFolder)
+        var id: String {
+            switch self {
+            case .guild(let g): return "g:\(g.id)"
+            case .folder(let f): return "f:\(f.id ?? f.guildIds.joined())"
+            }
+        }
+    }
+
+    private var railItems: [RailItem] {
+        let folders = model.guildFolders
+        let memberOf = Dictionary(grouping: folders.flatMap { folder in
+            folder.guildIds.map { ($0, folder) }
+        }, by: \.0).mapValues { $0.first!.1 }
+        var emittedFolders: Set<String> = []
+        return model.guilds.compactMap { guild -> RailItem? in
+            if let folder = memberOf[guild.id],
+               isRealFolder(folder) {
+                let key = folderKey(folder)
+                guard !emittedFolders.contains(key) else { return nil }
+                emittedFolders.insert(key)
+                return .folder(folder)
+            }
+            return .guild(guild)
+        }
+    }
+
+    /// A folder record is a *real* folder when Discord gave it an id or a name,
+    /// or when it holds more than one server. Discord keeps *every* guild in a
+    /// folder record — unfiled ones are single-guild entries with nothing else
+    /// set — so anything else renders as an ordinary server icon.
+    private func isRealFolder(_ folder: GuildOrderProto.GuildFolder) -> Bool {
+        folder.id != nil
+            || folder.name?.isEmpty == false
+            || folder.guildIds.count > 1
+    }
+
+    private func folderKey(_ folder: GuildOrderProto.GuildFolder) -> String {
+        folder.id ?? folder.name ?? folder.guildIds.joined()
+    }
+
+    private func folderBinding(_ folder: GuildOrderProto.GuildFolder) -> Binding<Bool> {
+        let key = folderKey(folder)
+        return Binding(
+            get: { expandedFolders.contains(key) },
+            set: { if $0 { expandedFolders.insert(key) } else { expandedFolders.remove(key) } }
+        )
+    }
+
+    /// A compact folder capsule: overlapping member icons on a tinted tile
+    /// (folder color when Discord saved one), name underneath. Clicking expands
+    /// the members into the rail.
+    private func folderCapsule(_ folder: GuildOrderProto.GuildFolder) -> some View {
+        let members = folder.guilds(in: model.guilds)
+        let preview = members.prefix(3)
+        return VStack(spacing: 2) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(folder.colorValue?.opacity(0.30) ?? Color.primary.opacity(0.10))
+                HStack(spacing: -4) {
+                    ForEach(Array(preview.enumerated()), id: \.offset) { _, guild in
+                        ServerIcon(guild: guild, size: 16)
+                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    }
+                }
+            }
+            .frame(width: 34, height: 34)
+            Text(folder.name?.isEmpty == false ? folder.name! : "Folder")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .help("\(folder.name ?? "Folder") — \(members.count) server\(members.count == 1 ? "" : "s")")
+        .padding(.vertical, 2)
     }
 
     private func serverRow(_ guild: Guild) -> some View {
@@ -297,11 +392,16 @@ struct ServerChannelView: View {
 
     private var channels: [Channel] { model.channelsByGuild[guild.id] ?? [] }
     private var textChannels: [Channel] {
-        channels.filter { !$0.isCategory && $0.isTextLike }
+        channels.filter { !$0.isCategory && $0.isTextLike && model.canView($0) }
             .sorted { $0.sortPosition < $1.sortPosition }
     }
     private var categories: [Channel] {
-        channels.filter(\.isCategory).sorted { $0.sortPosition < $1.sortPosition }
+        channels.filter(\.isCategory)
+            .filter { category in
+                // Skip categories whose every child is invisible to the user.
+                channels.contains { $0.parentId == category.id && $0.isTextLike && model.canView($0) }
+            }
+            .sorted { $0.sortPosition < $1.sortPosition }
     }
 
     var body: some View {
@@ -339,7 +439,7 @@ struct ServerChannelView: View {
                                 .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                                 .textCase(.uppercase)
                                 .padding(.top, 4)
-                            ForEach(channels.filter { $0.parentId == category.id && $0.isTextLike }
+                            ForEach(channels.filter { $0.parentId == category.id && $0.isTextLike && model.canView($0) }
                                 .sorted { $0.sortPosition < $1.sortPosition }) { child in
                                 channelRow(child)
                             }
@@ -364,6 +464,12 @@ struct ServerChannelView: View {
             .padding(12)
         }
         .frame(width: 280, height: 440)
+        .onAppear {
+            let perms = channels.filter { !$0.isCategory && $0.isTextLike && !model.canView($0) }
+            if !perms.isEmpty {
+                Diag.app("\(guild.name): hiding \(perms.count) of \(channels.count) channels \(perms.prefix(3).compactMap(\.name).joined(separator: ", "))")
+            }
+        }
     }
 
     private func channelRow(_ channel: Channel) -> some View {

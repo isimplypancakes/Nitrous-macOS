@@ -137,19 +137,19 @@ struct EmbedCard: View {
     @ViewBuilder private var image: some View {
         if let i = embed.image ?? embed.video, let u = i.url, let url = URL(string: u) {
             let box = fit(width: i.width, height: i.height, maxW: 226, maxH: 250)
-            AsyncImage(url: url) { phase in
-                if let img = phase.image { img.resizable().scaledToFill() }
-                else { RoundedRectangle(cornerRadius: 8).fill(.quaternary).overlay(ProgressView()) }
-            }
-            .frame(width: box.width, height: box.height)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(alignment: .center) {
-                if embed.video != nil {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.white.opacity(0.92))
-                        .shadow(radius: 4)
+            if embed.video != nil, MediaLink.isVideo(url) {
+                // Discord's GIF picker sends mp4/gifv embeds — play them, muted
+                // and looping, instead of showing a still poster. The player
+                // sizes itself; the clip is the only constraint.
+                VideoAttachmentView(url: url, title: "Video", autoLoop: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                AsyncImage(url: url) { phase in
+                    if let img = phase.image { img.resizable().scaledToFill() }
+                    else { RoundedRectangle(cornerRadius: 8).fill(.quaternary).overlay(ProgressView()) }
                 }
+                .frame(width: box.width, height: box.height)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
         }
     }
@@ -177,15 +177,19 @@ struct EmbedCard: View {
         if let i = embed.image ?? embed.thumbnail ?? embed.video,
            let u = i.url, let url = URL(string: u) {
             let box = fit(width: i.width, height: i.height, maxW: 236, maxH: 260)
-            AsyncImage(url: url) { phase in
-                if let img = phase.image { img.resizable().scaledToFill() }
-                else { RoundedRectangle(cornerRadius: 10).fill(.quaternary).overlay(ProgressView()) }
+            if embed.video != nil, MediaLink.isVideo(url) {
+                VideoAttachmentView(url: url, title: "Video", autoLoop: true)
+                    .frame(maxWidth: 560, alignment: .leading)
+            } else {
+                AsyncImage(url: url) { phase in
+                    if let img = phase.image { img.resizable().scaledToFill() }
+                    else { RoundedRectangle(cornerRadius: 10).fill(.quaternary).overlay(ProgressView()) }
+                }
+                .frame(width: box.width, height: box.height)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .contentShape(Rectangle())
+                .onTapGesture { if let u = embed.url, let link = URL(string: u) { openURL(link) } }
             }
-            .frame(width: box.width, height: box.height)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .contentShape(Rectangle())
-            .onTapGesture { if let u = embed.url, let link = URL(string: u) { openURL(link) } }
-    
         }
     }
 
